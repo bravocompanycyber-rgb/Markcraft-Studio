@@ -1,0 +1,38 @@
+Markcraft Studio 1.1 — Dependencies
+===================================
+
+REQUIRED (free / zero cost)
+---------------------------
+• Node.js 16.x LTS   (for Electron 22 compatibility)
+• npm (comes with Node)
+• Electron 22.3.27   (installed via npm)
+• electron-builder 24.13.3 (installed via npm)
+• Inno Setup 7       (free) for creating the Windows installer
+  Download: https://jrsoftware.org/isinfo.php
+
+ONE-COMMAND INSTALL
+-------------------
+  npm install
+
+BUILD THE INSTALLER
+-------------------
+  scripts\BUILD-INSTALLER.bat
+
+  This will:
+  1. Install npm packages if needed
+  2. Build the unpacked app
+  3. Compile the Inno Setup script into a distributable .exe
+
+SYSTEM FONTS USED (no paid licenses)
+------------------------------------
+Georgia, Times New Roman, Palatino, Garamond,
+Segoe UI, Arial, Helvetica, Trebuchet MS, Verdana,
+Tahoma, Calibri, Candara, Century Gothic, Impact,
+Arial Black, Courier New, Consolas, Lucida Console
+
+These are standard Windows / system fonts. No webfonts
+or commercial font files are bundled.
+
+NO PAID SERVICES / NO CLOUD / NO API KEYS
+----------------------------------------
+Everything runs locally. No internet required after install.

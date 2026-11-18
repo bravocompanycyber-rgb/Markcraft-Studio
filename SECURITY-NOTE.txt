@@ -1,0 +1,11 @@
+SECURITY NOTE — API KEYS
+========================
+You pasted a Groq API key in chat. Treat it as exposed.
+
+1. Go to https://console.groq.com/keys
+2. Revoke / delete the key that starts with gsk_
+3. Create a new key
+4. In Markcraft Studio → Preferences → paste the NEW key only
+
+Never commit API keys to git or share them in screenshots/chat.
+Keys are stored only on this computer (electron-store encrypted when available).

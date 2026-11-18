@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markcraft Studio</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">M</div>
+      <div class="brand-text">
+        <strong>MARKCRAFT</strong>
+        <small>STUDIO</small>
+      </div>
+    </div>
+
+    <div class="project-name">
+      <span class="status-dot" title="Local project"></span>
+      <input id="projectName" value="Untitled identity" aria-label="Project name" spellcheck="false">
+    </div>
+
+    <nav class="top-nav">
+      <button class="nav-btn" id="menuFile" title="File">File</button>
+      <button class="nav-btn" id="menuEdit" title="Edit">Edit</button>
+      <button class="nav-btn" id="menuView" title="View">View</button>
+      <button class="nav-btn" id="menuHelp" title="Help">Help</button>
+    </nav>
+
+    <div class="top-actions">
+      <button class="btn ghost" id="prefsBtn" title="Preferences">⚙</button>
+      <button class="btn subtle" id="newBtn">New</button>
+      <button class="btn subtle" id="openBtn">Open</button>
+      <button class="btn subtle" id="saveBtn">Save</button>
+      <div class="export-group">
+        <button class="btn primary" id="exportSvgBtn">SVG</button>
+        <button class="btn primary" id="exportPngBtn">PNG</button>
+        <button class="btn primary" id="exportPackageBtn">Package</button>
+        <button class="btn primary" id="exportPdfBtn" title="Multi-page brand guidelines PDF">PDF</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="workspace">
+
+    <!-- LEFT PANEL -->
+    <aside class="panel left-panel">
+      <div class="panel-section">
+        <div class="panel-heading">
+          <div><span class="eyebrow">01 · BRIEF</span><h2>Creative Brief</h2></div>
+        </div>
+        <label>Brand / product name
+          <input id="brandName" value="NORTHSTAR" maxlength="40" autocomplete="off">
+        </label>
+        <label>Descriptor / tagline
+          <input id="descriptor" value="STUDIO" maxlength="56" autocomplete="off">
+        </label>
+        <label>Industry
+          <select id="industry">
+            <option>Business / Company</option>
+            <option>Technology / SaaS</option>
+            <option>Finance / Fintech</option>
+            <option>Real Estate / Housing</option>
+            <option>Property Management</option>
+            <option>Construction / Development</option>
+            <option>Architecture / Design</option>
+            <option>Hospitality / Hotel</option>
+            <option>Food & Beverage</option>
+            <option>Café / Coffee</option>
+            <option>Restaurant</option>
+            <option>Health / Medical</option>
+            <option>Wellness / Fitness</option>
+            <option>Beauty / Salon</option>
+            <option>Fashion / Apparel</option>
+            <option>Education / Training</option>
+            <option>Legal / Law</option>
+            <option>Consulting</option>
+            <option>Sports / Team</option>
+            <option>Automotive</option>
+            <option>Logistics / Transport</option>
+            <option>Energy / Utilities</option>
+            <option>Agriculture</option>
+            <option>Nonprofit / NGO</option>
+            <option>Church / Ministry</option>
+            <option>Event / Entertainment</option>
+            <option>Media / Creative</option>
+            <option>Retail / E-commerce</option>
+            <option>Personal brand</option>
+          </select>
+        </label>
+        <label>Personality
+          <select id="personality">
+            <option>Premium & minimal</option>
+            <option>Bold & modern</option>
+            <option>Elegant & timeless</option>
+            <option>Warm & approachable</option>
+            <option>Playful & expressive</option>
+            <option>Heritage & established</option>
+            <option>Technical & precise</option>
+            <option>Luxury & exclusive</option>
+          </select>
+        </label>
+        <label>Colour direction
+          <select id="palette">
+            <option>Navy & gold</option>
+            <option>Royal blue & gold</option>
+            <option>Midnight & champagne</option>
+            <option>Forest & ivory</option>
+            <option>Emerald & cream</option>
+            <option>Deep navy & silver</option>
+            <option>Slate & copper</option>
+            <option>Terracotta & sand</option>
+            <option>Monochrome</option>
+            <option>Coral & slate</option>
+            <option>Indigo & amber</option>
+            <option>Custom colours</option>
+          </select>
+        </label>
+        <label>Additional notes
+          <textarea id="notes" rows="2" placeholder="Symbolism, must-include elements, things to avoid..."></textarea>
+        </label>
+        <button class="btn primary full" id="generateBtn">✦ Generate concepts</button>
+        <button class="btn subtle full" id="aiGenerateBtn" style="margin-top:8px">◎ AI concept suggestions</button>
+        <p class="hint" id="aiStatusHint" style="margin-top:6px">AI is optional. Configure in Preferences.</p>
+      </div>
+
+      <div class="panel-section layers-section">
+        <div class="panel-heading">
+          <div><span class="eyebrow">LAYERS</span><h2>Objects</h2></div>
+        </div>
+        <ul class="layer-list" id="layerList"></ul>
+      </div>
+    </aside>
+
+    <!-- CENTER CANVAS -->
+    <section class="canvas-area">
+      <div class="canvas-toolbar">
+        <div class="tool-group">
+          <button class="tool-btn active" data-tool="select" title="Select (V)">↖</button>
+          <button class="tool-btn" data-tool="pan" title="Pan">✥</button>
+        </div>
+        <div class="tool-group">
+          <button class="icon-btn" id="alignLeft" title="Align left">⊣</button>
+          <button class="icon-btn" id="alignCenter" title="Align center">≡</button>
+          <button class="icon-btn" id="alignRight" title="Align right">⊢</button>
+        </div>
+        <div class="toolbar-right">
+          <button class="icon-btn" id="bgToggle" title="Artboard background">◐</button>
+          <button class="icon-btn" id="gridToggle" title="Toggle grid">▦</button>
+          <button class="icon-btn" id="zoomOut" title="Zoom out">−</button>
+          <span class="zoom-label" id="zoomLabel">100%</span>
+          <button class="icon-btn" id="zoomIn" title="Zoom in">+</button>
+        </div>
+      </div>
+
+      <div class="artboard-wrap" id="artboardWrap">
+        <div class="artboard" id="artboard">
+          <svg id="logoSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" role="img" aria-label="Logo artboard"></svg>
+        </div>
+      </div>
+
+      <div class="canvas-footer">
+        <span id="canvasStatus">Ready · Vector artboard 900×600</span>
+        <span id="selectionInfo">No selection</span>
+      </div>
+
+      <div class="concept-strip">
+        <div class="concept-header">
+          <span class="eyebrow">CONCEPT FAMILIES</span>
+          <strong>Select a direction to refine</strong>
+        </div>
+        <div class="concepts" id="concepts"></div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL -->
+    <aside class="panel right-panel">
+      <div class="panel-heading">
+        <div><span class="eyebrow">03 · REFINEMENT</span><h2>Inspector</h2></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="type">Type</button>
+        <button class="tab" data-tab="color">Colour</button>
+        <button class="tab" data-tab="layout">Layout</button>
+        <button class="tab" data-tab="symbol">Symbol</button>
+      </div>
+
+      <!-- TYPE TAB -->
+      <section class="tab-content" id="tab-type">
+        <label>Primary text
+          <input id="editName" value="NORTHSTAR" maxlength="40">
+        </label>
+        <label>Supporting text
+          <input id="editDescriptor" value="STUDIO" maxlength="56">
+        </label>
+        <label>Typeface (system fonts)
+          <select id="fontFamily"></select>
+        </label>
+        <label>Letter spacing <span class="value-label" id="trackingVal">5</span>
+          <input id="tracking" type="range" min="-2" max="24" value="5">
+        </label>
+        <label>Wordmark scale <span class="value-label" id="scaleVal">100%</span>
+          <input id="scale" type="range" min="55" max="145" value="100">
+        </label>
+        <label>Font weight
+          <select id="fontWeight">
+            <option value="400">Regular</option>
+            <option value="500">Medium</option>
+            <option value="600" selected>Semibold</option>
+            <option value="700">Bold</option>
+          </select>
+        </label>
+      </section>
+
+      <!-- COLOUR TAB -->
+      <section class="tab-content" id="tab-color" hidden>
+        <div class="color-mode-toggle">
+          <button class="mode-btn active" data-mode="rgb">RGB</button>
+          <button class="mode-btn" data-mode="cmyk">CMYK</button>
+        </div>
+
+        <label>Primary colour
+          <div class="color-row">
+            <input type="color" id="primaryColor" value="#c9a227">
+            <input type="text" id="primaryHex" value="#c9a227" maxlength="7" spellcheck="false">
+          </div>
+          <div class="cmyk-row" id="primaryCmyk" hidden>
+            <label>C <input type="number" id="pC" min="0" max="100" value="0"></label>
+            <label>M <input type="number" id="pM" min="0" max="100" value="20"></label>
+            <label>Y <input type="number" id="pY" min="0" max="100" value="85"></label>
+            <label>K <input type="number" id="pK" min="0" max="100" value="15"></label>
+          </div>
+        </label>
+
+        <label>Secondary colour
+          <div class="color-row">
+            <input type="color" id="secondaryColor" value="#2c3e50">
+            <input type="text" id="secondaryHex" value="#2c3e50" maxlength="7" spellcheck="false">
+          </div>
+          <div class="cmyk-row" id="secondaryCmyk" hidden>
+            <label>C <input type="number" id="sC" min="0" max="100" value="70"></label>
+            <label>M <input type="number" id="sM" min="0" max="100" value="45"></label>
+            <label>Y <input type="number" id="sY" min="0" max="100" value="30"></label>
+            <label>K <input type="number" id="sK" min="0" max="100" value="45"></label>
+          </div>
+        </label>
+
+        <label>Accent / gradient end
+          <div class="color-row">
+            <input type="color" id="accentColor" value="#e8d48b">
+            <input type="text" id="accentHex" value="#e8d48b" maxlength="7" spellcheck="false">
+          </div>
+        </label>
+
+        <label>Use gradient on mark
+          <select id="gradientMode">
+            <option value="none">Solid colour</option>
+            <option value="linear">Linear gradient</option>
+            <option value="radial">Radial gradient</option>
+          </select>
+        </label>
+
+        <label>Artboard background
+          <select id="bgMode">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="transparent">Transparent</option>
+            <option value="custom">Custom colour</option>
+          </select>
+        </label>
+        <div id="customBgRow" hidden>
+          <label>Custom background
+            <div class="color-row">
+              <input type="color" id="customBgColor" value="#f7f5f0">
+              <input type="text" id="customBgHex" value="#f7f5f0" maxlength="7">
+            </div>
+          </label>
+        </div>
+
+        <!-- Live colour preview swatches -->
+        <div class="live-preview">
+          <span class="eyebrow">LIVE PREVIEW</span>
+          <div class="swatch-row" id="swatchRow">
+            <div class="swatch" id="swatchPrimary" title="Primary"></div>
+            <div class="swatch" id="swatchSecondary" title="Secondary"></div>
+            <div class="swatch" id="swatchAccent" title="Accent"></div>
+            <div class="swatch gradient" id="swatchGradient" title="Gradient"></div>
+          </div>
+          <div class="harmony-row">
+            <button class="btn subtle tiny" id="harmonyComplement">Complement</button>
+            <button class="btn subtle tiny" id="harmonyAnalogous">Analogous</button>
+            <button class="btn subtle tiny" id="harmonyTriad">Triad</button>
+            <button class="btn subtle tiny" id="harmonyMono">Mono</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- LAYOUT TAB -->
+      <section class="tab-content" id="tab-layout" hidden>
+        <label>Composition
+          <select id="composition">
+            <option value="stacked">Stacked (mark above type)</option>
+            <option value="horizontal">Horizontal (mark + type)</option>
+            <option value="wordmark">Wordmark only</option>
+            <option value="seal">Seal / badge</option>
+            <option value="monogram">Monogram focus</option>
+          </select>
+        </label>
+        <label>Symbol size <span class="value-label" id="symbolSizeVal">100%</span>
+          <input id="symbolSize" type="range" min="40" max="160" value="100">
+        </label>
+        <label>Vertical offset <span class="value-label" id="offsetYVal">0</span>
+          <input id="offsetY" type="range" min="-80" max="80" value="0">
+        </label>
+        <label>Horizontal offset <span class="value-label" id="offsetXVal">0</span>
+          <input id="offsetX" type="range" min="-120" max="120" value="0">
+        </label>
+      </section>
+
+      <!-- SYMBOL TAB -->
+      <section class="tab-content" id="tab-symbol" hidden>
+        <label>Symbol family
+          <select id="symbolKind">
+            <option value="craft">Designer craft (classic method)</option>
+            <option value="freeform">Freeform (unique procedural)</option>
+            <option value="monogram">Initial monogram</option>
+            <option value="building">Building / tower</option>
+            <option value="skyline">City skyline</option>
+            <option value="house">House / home</option>
+            <option value="key">Key / access</option>
+            <option value="columns">Columns / classical</option>
+            <option value="roof">Roof / shelter</option>
+            <option value="nodes">Network nodes</option>
+            <option value="circuit">Circuit / tech</option>
+            <option value="hexagon">Hexagon / tech</option>
+            <option value="growth">Growth bars</option>
+            <option value="coin">Coin / value</option>
+            <option value="pulse">Pulse / health</option>
+            <option value="droplet">Droplet / pure</option>
+            <option value="flame">Flame / energy</option>
+            <option value="cup">Cup / café</option>
+            <option value="leaf">Leaf / organic</option>
+            <option value="bolt">Bolt / power</option>
+            <option value="chevron">Chevron / motion</option>
+            <option value="target">Target / focus</option>
+            <option value="book">Book / knowledge</option>
+            <option value="crest">Crest / heritage</option>
+            <option value="ring">Ring / unity</option>
+            <option value="petal">Petal / beauty</option>
+            <option value="arrow">Arrow / direction</option>
+            <option value="shield">Shield / trust</option>
+            <option value="diamond">Diamond / premium</option>
+            <option value="orbit">Orbit / global</option>
+            <option value="wave">Wave / fluid</option>
+            <option value="star">Star / radiance</option>
+            <option value="abstract">Abstract mark</option>
+            <option value="none">None (wordmark only)</option>
+          </select>
+        </label>
+        <p class="hint">All symbols are pure vector paths. They remain fully editable in Illustrator, Affinity Designer, Inkscape and Figma.</p>
+      </section>
+
+      <!-- QUALITY GATE -->
+      <div class="quality-panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">QUALITY GATE</span><h2>Pre-export checks</h2></div>
+          <span class="badge" id="qualityCount">Clean</span>
+        </div>
+        <ul class="quality-list" id="qualityList"></ul>
+        <div class="contrast-card" id="contrastCard">
+          <div class="contrast-indicator"></div>
+          <span id="contrastText">Contrast check</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="status-bar">
+    <span>Markcraft Studio 1.1 · Local-first · Zero cloud</span>
+    <span id="statusMsg">Ready</span>
+  </div>
+</div>
+
+<!-- PREFERENCES MODAL -->
+<div class="modal-overlay" id="prefsModal" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Preferences</h2>
+      <button class="modal-close" id="prefsClose" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Interface theme
+        <select id="prefTheme">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="system">System</option>
+        </select>
+      </label>
+      <label>Default artboard background
+        <select id="prefBg">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="transparent">Transparent</option>
+        </select>
+      </label>
+      <label>Show grid by default
+        <select id="prefGrid">
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <label>Export PNG resolution
+        <select id="prefPngRes">
+          <option value="1800">1800 × 1200</option>
+          <option value="2700" selected>2700 × 1800 (recommended)</option>
+          <option value="3600">3600 × 2400</option>
+        </select>
+      </label>
+      <label>Auto-save interval
+        <select id="prefAutosave">
+          <option value="0">Off</option>
+          <option value="60">Every 1 minute</option>
+          <option value="180" selected>Every 3 minutes</option>
+          <option value="300">Every 5 minutes</option>
+        </select>
+      </label>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+      <div class="eyebrow">OPTIONAL AI</div>
+      <label>AI provider
+        <select id="prefAiProvider">
+          <option value="none">Off (rule-based only)</option>
+          <option value="groq">Groq (cloud, your API key)</option>
+          <option value="ollama">Ollama (local)</option>
+        </select>
+      </label>
+      <label>Groq API key
+        <input id="prefAiKey" type="password" placeholder="gsk_..." autocomplete="off">
+      </label>
+      <label>Groq model
+        <input id="prefAiModel" value="llama-3.3-70b-versatile" autocomplete="off">
+      </label>
+      <label>Ollama URL
+        <input id="prefOllamaUrl" value="http://localhost:11434" autocomplete="off">
+      </label>
+      <label>Ollama model
+        <input id="prefOllamaModel" value="llama3.2" autocomplete="off">
+      </label>
+      <p class="hint">API keys are stored only on this computer (encrypted when electron-store is available). Never share your key. Rotate any key that was pasted in chat.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn subtle" id="prefsCancel">Cancel</button>
+      <button class="btn primary" id="prefsSave">Save preferences</button>
+    </div>
+  </div>
+</div>
+
+<!-- ABOUT MODAL -->
+<div class="modal-overlay" id="aboutModal" hidden>
+  <div class="modal about-modal">
+    <div class="modal-header">
+      <h2>About Markcraft Studio</h2>
+      <button class="modal-close" id="aboutClose" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body about-body">
+      <div class="about-brand">
+        <div class="brand-mark large">M</div>
+        <div>
+          <strong>Markcraft Studio</strong>
+          <span>Version 1.1.0</span>
+        </div>
+      </div>
+      <p>Professional vector logo and brand identity studio for people who need excellent marks without being illustrators.</p>
+      <ul class="about-list">
+        <li>Local-first — all work stays on your computer</li>
+        <li>Clean SVG + high-resolution PNG export</li>
+        <li>RGB and CMYK-aware colour tools</li>
+        <li>System fonts only — zero paid font licenses required</li>
+        <li>Concept generator with quality gates</li>
+        <li>Optional AI (Groq / Ollama) — your keys only</li>
+        <li>Multi-page brand guidelines PDF</li>
+      </ul>
+      <p class="muted">© Bravo Projects. This software does not guarantee legal uniqueness of generated marks. Final trademark and copyright clearance is the user’s responsibility.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn primary" id="aboutOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

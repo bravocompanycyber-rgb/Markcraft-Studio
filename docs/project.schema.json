@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Markcraft Studio Project",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "design"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "id": { "type": "string", "maxLength": 100 },
+    "name": { "type": "string", "maxLength": 80 },
+    "brief": { "type": "object" },
+    "design": { "type": "object" },
+    "svg": { "type": "string" }
+  }
+}
