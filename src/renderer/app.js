@@ -34,7 +34,8 @@ function loadPrefsLocal() {
 
 function savePrefsLocal(p) {
   // Never persist key in a way that is trivial — still local only
-  localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  const { aiApiKey, ...safe } = p;      // the API key lives only in the encrypted main-process store
+  localStorage.setItem(PREFS_KEY, JSON.stringify(safe));
 }
 
 let prefs = loadPrefsLocal();
@@ -74,7 +75,7 @@ function applyTheme(theme) {
 // STATE
 // ─────────────────────────────────────────────
 const state = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: 'project-' + Date.now(),
   name: 'Untitled identity',
   brief: {
@@ -82,33 +83,19 @@ const state = {
     descriptor: 'STUDIO',
     industry: 'Business / Company',
     personality: 'Premium & minimal',
-    palette: 'Midnight & champagne',
+    palette: 'Navy & gold',
     notes: ''
   },
-  design: {
-    composition: 'stacked',
-    symbol: 'monogram',
-    primary: '#1a365d',
-    secondary: '#c9a227',
-    accent: '#e8d48b',
-    font: "Georgia, 'Times New Roman', 'Palatino Linotype', serif",
-    fontWeight: '600',
-    tracking: 5,
-    scale: 100,
-    symbolSize: 100,
-    offsetY: 0,
-    offsetX: 0,
-    background: 'light',
-    customBg: '#f7f5f0',
-    gradientMode: 'none',
-    variant: 0
-  },
+  design: null,            // set below from defaultDesign()
   selectedId: null,
   tool: 'select',
-  concepts: [],
-  activeConcept: 0,
+  view: 'gallery',
   zoom: 100,
-  colorMode: 'rgb'
+  pan: { x: 0, y: 0 },
+  colorMode: 'rgb',
+  dirty: false,
+  lastWarnings: [],
+  lastBBox: null
 };
 
 const PALETTES = {
@@ -151,13 +138,15 @@ const SYSTEM_FONTS = [
   { label: 'Lucida Console', value: "'Lucida Console', Monaco, monospace" }
 ];
 
+state.design = defaultDesign();
+
 function populateFonts() {
   const sel = $('fontFamily');
   if (!sel) return;
-  sel.innerHTML = SYSTEM_FONTS.map(f =>
+  sel.innerHTML = '<option value="">Auto — matched to the concept</option>' + SYSTEM_FONTS.map(f =>
     `<option value="${f.value.replace(/"/g, '&quot;')}">${f.label}</option>`
   ).join('');
-  sel.value = state.design.font;
+  sel.value = state.design.font || '';
 }
 
 // ─────────────────────────────────────────────
@@ -317,683 +306,126 @@ function escapeXml(s) {
 }
 
 // ─────────────────────────────────────────────
-// PROCEDURAL FREEFORM MARK ENGINE
-// Generates unique SVG path geometry per concept
-// (not template swaps — real unique geometry)
 // ─────────────────────────────────────────────
-function hashSeed(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
+// ENGINE BRIDGE
+// The logo is composed by logo-engine.js (measured layout, layered
+// icon library, frames, ornaments). app.js only holds UI state.
+// ─────────────────────────────────────────────
+const Engine = window.MarkcraftEngine;
+const IconLib = window.MarkcraftIcons;
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
-function mulberry32(a) {
-  return function() {
-    let t = (a += 0x6D2B79F5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+function defaultDesign() {
+  return {
+    layout: 'stacked',
+    icon: 'monogram',
+    frame: 'circle',
+    fill: 'solid',
+    ornament: 'none',
+    finish: 'flat',
+    backdrop: 'none',
+    badgeIcon: '',
+    wordmarkStyle: 'plain',
+    fontKey: 'serif',
+    font: '',                 // '' = automatic (matched to the concept); otherwise a CSS stack override
+    fontWeight: '600',
+    caseStyle: 'upper',
+    tracking: 4,
+    roles: 'std',
+    primary: '#1a365d',
+    secondary: '#c9a227',
+    accent: '#e8d48b',
+    gradientMode: 'none',
+    scale: 100,
+    symbolSize: 100,
+    offsetX: 0,
+    offsetY: 0,
+    align: 'center',
+    background: 'light',
+    customBg: '#f7f5f0'
   };
 }
 
-function seededRng(seedStr) {
-  return mulberry32(hashSeed(String(seedStr)));
+function artboardBg() {
+  const d = state.design;
+  if (d.background === 'dark') return '#1a1f28';
+  if (d.background === 'custom') return d.customBg || '#f7f5f0';
+  return '#ffffff';
 }
 
-function lerp(a, b, t) { return a + (b - a) * t; }
-
-// ─────────────────────────────────────────────
-// TRADITIONAL LOGO CRAFT (pre-AI design school)
-// Principles from decades of professional practice:
-// simplicity · geometry · proportion · negative space ·
-// versatility · appropriateness · memorability
-// ─────────────────────────────────────────────
-
-const PHI = 1.6180339887; // golden ratio
-const PHI_INV = 0.6180339887;
-
-/** Classic construction: circle, square, triangle relationships */
-function craftGeometry(rng) {
-  // Prefer simple geometric bases designers actually use
-  const bases = ['circle', 'square', 'shield', 'diamond', 'hex', 'arc'];
-  return bases[Math.floor(rng() * bases.length)];
-}
-
-/**
- * Build a mark the way a trained designer constructs one:
- * - Start from geometry (circle/square/grid)
- * - Limit to 1–2 ideas
- * - Use proportion (often golden or equal division)
- * - Protect negative space
- * - Ensure it works at small size (thick enough strokes)
- */
-function craftMark(seedStr, color, size, industry, personality) {
-  const rng = seededRng(seedStr + '|craft');
-  const s = size / 100;
-  const fill = color;
-  const g = (content) => `<g transform="translate(450 200) scale(${s})">${content}</g>`;
-
-  // Design method selection based on industry conventions (classic practice)
-  const method = pickCraftMethod(industry, personality, rng);
-
-  if (method === 'lettermark') {
-    // Classic lettermark in geometric container — Paul Rand / Wolff Olins school
-    const letter = ((state.brief && state.brief.brand) || 'A').charAt(0).toUpperCase();
-    const shape = rng() > 0.5 ? 'circle' : 'rounded';
-    if (shape === 'circle') {
-      return g(`
-        <circle r="52" fill="${fill}"/>
-        <circle r="44" fill="none" stroke="#fff" stroke-opacity="0.15" stroke-width="1"/>
-        <text x="0" y="18" text-anchor="middle" fill="#fff" stroke="none"
-          font-family="Georgia, 'Times New Roman', serif" font-size="56" font-weight="600">${escapeXml(letter)}</text>`);
-    }
-    return g(`
-      <rect x="-48" y="-48" width="96" height="96" rx="12" fill="${fill}"/>
-      <rect x="-40" y="-40" width="80" height="80" rx="8" fill="none" stroke="#fff" stroke-opacity="0.14" stroke-width="1"/>
-      <text x="0" y="18" text-anchor="middle" fill="#fff" stroke="none"
-        font-family="Georgia, 'Times New Roman', serif" font-size="54" font-weight="600">${escapeXml(letter)}</text>`);
-  }
-
-  if (method === 'monogram_overlap') {
-    // Two-letter interlock — classic bank / institution approach
-    const brand = ((state.brief && state.brief.brand) || 'AB').toUpperCase().replace(/[^A-Z]/g, '');
-    const a = brand.charAt(0) || 'A';
-    const b = brand.charAt(1) || brand.charAt(0) || 'B';
-    return g(`
-      <circle r="54" fill="none" stroke="${fill}" stroke-width="3"/>
-      <text x="-12" y="16" text-anchor="middle" fill="${fill}" stroke="none"
-        font-family="Georgia, serif" font-size="42" font-weight="700" opacity="0.95">${escapeXml(a)}</text>
-      <text x="14" y="16" text-anchor="middle" fill="${fill}" stroke="none"
-        font-family="Georgia, serif" font-size="42" font-weight="700" opacity="0.7">${escapeXml(b)}</text>`);
-  }
-
-  if (method === 'seal_crest') {
-    // Heraldic / institutional seal — education, law, heritage
-    const R = 54;
-    return g(`
-      <circle r="${R}" fill="none" stroke="${fill}" stroke-width="2.2"/>
-      <circle r="${R * PHI_INV + 6}" fill="none" stroke="${fill}" stroke-width="1" opacity="0.35"/>
-      <path d="M0 ${-R*0.55} L${R*0.38} ${-R*0.15} L${R*0.24} ${R*0.4} L0 ${R*0.55} L${-R*0.24} ${R*0.4} L${-R*0.38} ${-R*0.15} Z" fill="${fill}"/>
-      <circle r="8" fill="#fff" opacity="0.2"/>`);
-  }
-
-  if (method === 'geometric_icon') {
-    // Single strong geometric idea — modern classic (Chase, BP flower, etc.)
-    const kind = Math.floor(rng() * 5);
-    if (kind === 0) {
-      // Square rotated + circle (balance of stability + continuity)
-      return g(`
-        <rect x="-34" y="-34" width="68" height="68" transform="rotate(45)" fill="${fill}"/>
-        <circle r="18" fill="#fff" opacity="0.2"/>`);
-    }
-    if (kind === 1) {
-      // Nested circles — unity / global
-      return g(`
-        <circle r="52" fill="none" stroke="${fill}" stroke-width="7"/>
-        <circle r="28" fill="${fill}"/>`);
-    }
-    if (kind === 2) {
-      // Triangle upward — growth / stability
-      return g(`
-        <path d="M0 -50 L48 38 L-48 38 Z" fill="${fill}"/>
-        <path d="M0 -22 L22 22 L-22 22 Z" fill="#fff" opacity="0.15"/>`);
-    }
-    if (kind === 3) {
-      // Horizontal bars decreasing — classic abstraction
-      return g(`
-        <rect x="-48" y="-28" width="96" height="12" rx="2" fill="${fill}"/>
-        <rect x="-36" y="-6" width="72" height="12" rx="2" fill="${fill}" opacity="0.85"/>
-        <rect x="-24" y="16" width="48" height="12" rx="2" fill="${fill}" opacity="0.7"/>`);
-    }
-    // Arc + stem — simple distinctive
-    return g(`
-      <path d="M-40 20 A44 44 0 1 1 40 20" fill="none" stroke="${fill}" stroke-width="10" stroke-linecap="round"/>
-      <circle cx="0" cy="22" r="8" fill="${fill}"/>`);
-  }
-
-  if (method === 'negative_space') {
-    // Figure-ground play — classic clever logo craft
-    return g(`
-      <circle r="52" fill="${fill}"/>
-      <path d="M-8 -28 L22 0 L-8 28 L-8 12 L-28 12 L-28 -12 L-8 -12 Z" fill="#fff" opacity="0.92"/>`);
-  }
-
-  if (method === 'swoosh_motion') {
-    // Controlled motion mark — sports / transport tradition
-    return g(`
-      <path d="M-52 18 C-20 -48 24 -40 50 6 C28 8 8 20 -8 22 C-24 24 -40 22 -52 18 Z" fill="${fill}"/>
-      <path d="M-36 8 C-12 -22 16 -18 34 2" fill="none" stroke="#fff" stroke-width="3" opacity="0.2" stroke-linecap="round"/>`);
-  }
-
-  if (method === 'pillar_structure') {
-    // Architecture / law / institution
-    return g(`
-      <rect x="-40" y="22" width="80" height="8" fill="${fill}"/>
-      <rect x="-36" y="-32" width="10" height="54" fill="${fill}"/>
-      <rect x="-5" y="-32" width="10" height="54" fill="${fill}"/>
-      <rect x="26" y="-32" width="10" height="54" fill="${fill}"/>
-      <path d="M-42 -32 H42 L32 -48 H-32 Z" fill="${fill}"/>`);
-  }
-
-  if (method === 'leaf_organic') {
-    // Nature / health / food — simplified leaf (not clipart)
-    return g(`
-      <path d="M0 48 C-50 10 -36 -48 40 -48 C42 12 22 40 0 48 Z" fill="${fill}"/>
-      <path d="M2 40 Q8 0 28 -28" fill="none" stroke="#fff" stroke-width="2" opacity="0.35"/>`);
-  }
-
-  // Default: golden-ratio circle + square intersection (timeless construction)
-  const r = 50;
-  const sq = r * PHI_INV;
-  return g(`
-    <circle r="${r}" fill="${fill}" opacity="0.92"/>
-    <rect x="${-sq}" y="${-sq}" width="${sq*2}" height="${sq*2}" fill="#fff" opacity="0.18"/>
-    <circle r="${r * PHI_INV * 0.7}" fill="${fill}"/>`);
-}
-
-function pickCraftMethod(industry, personality, rng) {
-  const ind = (industry || '').toLowerCase();
-  const per = (personality || '').toLowerCase();
-
-  // Industry conventions from real design practice
-  let pool = ['lettermark', 'geometric_icon', 'negative_space'];
-
-  if (ind.includes('tech') || ind.includes('saas'))
-    pool = ['geometric_icon', 'lettermark', 'negative_space', 'swoosh_motion'];
-  else if (ind.includes('finance') || ind.includes('fintech') || ind.includes('bank'))
-    pool = ['lettermark', 'monogram_overlap', 'geometric_icon', 'seal_crest'];
-  else if (ind.includes('real estate') || ind.includes('housing') || ind.includes('property') || ind.includes('construction') || ind.includes('architecture'))
-    pool = ['pillar_structure', 'geometric_icon', 'lettermark', 'seal_crest'];
-  else if (ind.includes('legal') || ind.includes('law') || ind.includes('education'))
-    pool = ['seal_crest', 'pillar_structure', 'monogram_overlap', 'lettermark'];
-  else if (ind.includes('food') || ind.includes('café') || ind.includes('cafe') || ind.includes('restaurant') || ind.includes('agriculture'))
-    pool = ['leaf_organic', 'lettermark', 'geometric_icon'];
-  else if (ind.includes('health') || ind.includes('medical') || ind.includes('wellness'))
-    pool = ['leaf_organic', 'geometric_icon', 'lettermark', 'negative_space'];
-  else if (ind.includes('sport') || ind.includes('fitness') || ind.includes('auto') || ind.includes('logistic'))
-    pool = ['swoosh_motion', 'geometric_icon', 'lettermark', 'negative_space'];
-  else if (ind.includes('beauty') || ind.includes('fashion') || ind.includes('luxury'))
-    pool = ['lettermark', 'monogram_overlap', 'geometric_icon', 'negative_space'];
-  else if (ind.includes('church') || ind.includes('heritage') || ind.includes('nonprofit'))
-    pool = ['seal_crest', 'lettermark', 'leaf_organic'];
-
-  if (per.includes('heritage') || per.includes('luxury') || per.includes('elegant'))
-    pool = ['seal_crest', 'monogram_overlap', 'lettermark', ...pool];
-  if (per.includes('minimal') || per.includes('premium'))
-    pool = ['geometric_icon', 'lettermark', 'negative_space', ...pool];
-  if (per.includes('bold') || per.includes('playful'))
-    pool = ['swoosh_motion', 'negative_space', 'geometric_icon', ...pool];
-
-  // Unique pick from pool
-  return pool[Math.floor(rng() * pool.length)];
-}
-
-/** Premium freeform mark — intentional geometry, design-school restraint */
-function proceduralMark(seedStr, color, size, styleHint) {
-  const rng = seededRng(seedStr + '|' + (styleHint || 'free'));
-  const s = size / 100;
-  const fill = color;
-  const styles = ['geo', 'organic', 'ribbon', 'constellation', 'blade', 'nest', 'arcgrid', 'lettercut'];
-  const style = styleHint && styles.includes(styleHint) ? styleHint : styles[Math.floor(rng() * styles.length)];
-  const parts = [];
-  const gOpen = `<g transform="translate(450 200) scale(${s})">`;
-  const gClose = `</g>`;
-
-  if (style === 'geo') {
-    // Single refined polygon + subtle inner — not a chaotic cluster
-    const sides = 5 + Math.floor(rng() * 3); // 5–7
-    const r = 42 + rng() * 10;
-    const rot = rng() * Math.PI * 2;
-    let d = '';
-    for (let k = 0; k < sides; k++) {
-      const a = rot + (k / sides) * Math.PI * 2;
-      const x = Math.cos(a) * r;
-      const y = Math.sin(a) * r;
-      d += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
-    }
-    d += 'Z';
-    parts.push(`<path d="${d}" fill="${fill}"/>`);
-    // elegant inner echo
-    let d2 = '';
-    const r2 = r * 0.55;
-    for (let k = 0; k < sides; k++) {
-      const a = rot + (k / sides) * Math.PI * 2 + Math.PI / sides;
-      d2 += (k === 0 ? 'M' : 'L') + (Math.cos(a) * r2).toFixed(1) + ' ' + (Math.sin(a) * r2).toFixed(1) + ' ';
-    }
-    d2 += 'Z';
-    parts.push(`<path d="${d2}" fill="#fff" opacity="0.14"/>`);
-  } else if (style === 'organic') {
-    // Smooth 5–6 lobe organic form, controlled
-    const lobes = 5 + Math.floor(rng() * 2);
-    const pts = [];
-    const baseR = 38 + rng() * 12;
-    for (let i = 0; i < lobes; i++) {
-      const a = (i / lobes) * Math.PI * 2 - Math.PI / 2;
-      const r = baseR * (0.88 + rng() * 0.22);
-      pts.push([Math.cos(a) * r, Math.sin(a) * r]);
-    }
-    let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)} `;
-    for (let i = 0; i < lobes; i++) {
-      const p0 = pts[i];
-      const p1 = pts[(i + 1) % lobes];
-      const a0 = (i / lobes) * Math.PI * 2 - Math.PI / 2;
-      const a1 = ((i + 1) / lobes) * Math.PI * 2 - Math.PI / 2;
-      const cr = baseR * 0.55;
-      const c1x = Math.cos(a0 + 0.4) * cr * 1.35;
-      const c1y = Math.sin(a0 + 0.4) * cr * 1.35;
-      const c2x = Math.cos(a1 - 0.4) * cr * 1.35;
-      const c2y = Math.sin(a1 - 0.4) * cr * 1.35;
-      d += `C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p1[0].toFixed(1)} ${p1[1].toFixed(1)} `;
-    }
-    d += 'Z';
-    parts.push(`<path d="${d}" fill="${fill}"/>`);
-  } else if (style === 'ribbon') {
-    // Single elegant swoosh — thick, confident, balanced
-    const lean = (rng() - 0.5) * 18;
-    const d = `M${(-48).toFixed(1)} ${(22 + lean * 0.3).toFixed(1)}
-      C${(-20 + lean).toFixed(1)} ${(-48).toFixed(1)} ${(8).toFixed(1)} ${(-52).toFixed(1)} ${(32).toFixed(1)} ${(-18).toFixed(1)}
-      C${(48).toFixed(1)} ${(4).toFixed(1)} ${(42).toFixed(1)} ${(28).toFixed(1)} ${(18).toFixed(1)} ${(38).toFixed(1)}
-      C${(2).toFixed(1)} ${(44).toFixed(1)} ${(-12).toFixed(1)} ${(28).toFixed(1)} ${(-8).toFixed(1)} ${(12).toFixed(1)}
-      C${(-4).toFixed(1)} ${(-4).toFixed(1)} ${(10).toFixed(1)} ${(-18).toFixed(1)} ${(6).toFixed(1)} ${(-6).toFixed(1)}
-      C${(0).toFixed(1)} ${(12).toFixed(1)} ${(-18).toFixed(1)} ${(32).toFixed(1)} ${(-42).toFixed(1)} ${(30).toFixed(1)}
-      C${(-52).toFixed(1)} ${(28).toFixed(1)} ${(-54).toFixed(1)} ${(24).toFixed(1)} ${(-48).toFixed(1)} ${(22 + lean * 0.3).toFixed(1)} Z`;
-    parts.push(`<path d="${d.replace(/\s+/g, ' ')}" fill="${fill}"/>`);
-  } else if (style === 'constellation') {
-    // 4–5 nodes, deliberate connections only
-    const nodes = [];
-    const count = 4 + Math.floor(rng() * 2);
-    for (let i = 0; i < count; i++) {
-      const a = (i / count) * Math.PI * 2 - Math.PI / 2 + (rng() - 0.5) * 0.35;
-      const r = 28 + rng() * 22;
-      nodes.push([Math.cos(a) * r, Math.sin(a) * r, 6 + rng() * 4]);
-    }
-    // connect consecutive + one chord
-    for (let i = 0; i < nodes.length; i++) {
-      const j = (i + 1) % nodes.length;
-      parts.push(`<line x1="${nodes[i][0].toFixed(1)}" y1="${nodes[i][1].toFixed(1)}" x2="${nodes[j][0].toFixed(1)}" y2="${nodes[j][1].toFixed(1)}" stroke="${fill}" stroke-width="2.5" opacity="0.9"/>`);
-    }
-    if (nodes.length >= 4) {
-      parts.push(`<line x1="${nodes[0][0].toFixed(1)}" y1="${nodes[0][1].toFixed(1)}" x2="${nodes[2][0].toFixed(1)}" y2="${nodes[2][1].toFixed(1)}" stroke="${fill}" stroke-width="1.5" opacity="0.45"/>`);
-    }
-    nodes.forEach(n => {
-      parts.push(`<circle cx="${n[0].toFixed(1)}" cy="${n[1].toFixed(1)}" r="${n[2].toFixed(1)}" fill="${fill}"/>`);
-    });
-  } else if (style === 'blade') {
-    // Refined 4–6 point mark, symmetric bias
-    const spikes = 4 + Math.floor(rng() * 3);
-    let d = '';
-    const rot = -Math.PI / 2 + (rng() - 0.5) * 0.2;
-    for (let i = 0; i < spikes * 2; i++) {
-      const a = rot + (i / (spikes * 2)) * Math.PI * 2;
-      const r = i % 2 === 0 ? 48 : 16 + rng() * 8;
-      d += (i === 0 ? 'M' : 'L') + (Math.cos(a) * r).toFixed(1) + ' ' + (Math.sin(a) * r).toFixed(1) + ' ';
-    }
-    d += 'Z';
-    parts.push(`<path d="${d}" fill="${fill}"/>`);
-  } else if (style === 'nest') {
-    // Two refined concentric rounded frames
-    const outer = 48 + rng() * 6;
-    const inner = outer * (0.58 + rng() * 0.1);
-    const sides = 6;
-    const rot = rng() * 0.4;
-    function poly(r, open) {
-      let d = '';
-      for (let k = 0; k < sides; k++) {
-        const a = rot + (k / sides) * Math.PI * 2;
-        d += (k === 0 ? 'M' : 'L') + (Math.cos(a) * r).toFixed(1) + ' ' + (Math.sin(a) * r).toFixed(1) + ' ';
-      }
-      return d + 'Z';
-    }
-    parts.push(`<path d="${poly(outer)}" fill="${fill}"/>`);
-    parts.push(`<path d="${poly(inner)}" fill="#fff" opacity="0.16"/>`);
-  } else if (style === 'arcgrid') {
-    // Two elegant arcs + center
-    for (let i = 0; i < 2; i++) {
-      const r = 28 + i * 16;
-      const start = -60 + rng() * 40;
-      const sweep = 200 + rng() * 40;
-      const large = sweep > 180 ? 1 : 0;
-      const a1 = start * Math.PI / 180;
-      const a2 = (start + sweep) * Math.PI / 180;
-      parts.push(`<path d="M${(Math.cos(a1)*r).toFixed(1)} ${(Math.sin(a1)*r).toFixed(1)} A${r} ${r} 0 ${large} 1 ${(Math.cos(a2)*r).toFixed(1)} ${(Math.sin(a2)*r).toFixed(1)}" fill="none" stroke="${fill}" stroke-width="${(4.5 - i).toFixed(1)}" stroke-linecap="round"/>`);
-    }
-    parts.push(`<circle r="${(7 + rng() * 4).toFixed(1)}" fill="${fill}"/>`);
-  } else {
-    // lettercut — premium circular badge with refined cut
-    const r = 50;
-    parts.push(`<circle r="${r}" fill="${fill}"/>`);
-    // soft inner ring
-    parts.push(`<circle r="38" fill="none" stroke="#fff" stroke-width="1.2" opacity="0.2"/>`);
-    // single elegant slash or arc cut
-    if (rng() > 0.35) {
-      const a = -0.6 + rng() * 1.2;
-      parts.push(`<line x1="${(-Math.cos(a)*36).toFixed(1)}" y1="${(-Math.sin(a)*36).toFixed(1)}" x2="${(Math.cos(a)*36).toFixed(1)}" y2="${(Math.sin(a)*36).toFixed(1)}" stroke="#fff" stroke-width="7" opacity="0.18" stroke-linecap="round"/>`);
-    } else {
-      parts.push(`<circle cx="${(8+rng()*6).toFixed(1)}" cy="${(-6-rng()*8).toFixed(1)}" r="${(10+rng()*6).toFixed(1)}" fill="#fff" opacity="0.15"/>`);
-    }
-  }
-
-  return gOpen + parts.join('') + gClose;
-}
-
-function freeformStyleForIndustry(industry, rng) {
-  const map = {
-    'Technology / SaaS': ['constellation', 'geo', 'arcgrid', 'blade'],
-    'Finance / Fintech': ['geo', 'nest', 'blade', 'arcgrid'],
-    'Real Estate / Housing': ['geo', 'nest', 'lettercut', 'blade'],
-    'Food & Beverage': ['organic', 'ribbon', 'lettercut'],
-    'Café / Coffee': ['organic', 'ribbon', 'lettercut'],
-    'Health / Medical': ['organic', 'arcgrid', 'nest'],
-    'Beauty / Salon': ['organic', 'ribbon', 'lettercut'],
-    'Sports / Team': ['blade', 'geo', 'ribbon'],
-    'Legal / Law': ['nest', 'geo', 'lettercut'],
-    'Media / Creative': ['ribbon', 'organic', 'constellation', 'blade'],
-    'Energy / Utilities': ['blade', 'arcgrid', 'geo'],
-    'Logistics / Transport': ['ribbon', 'blade', 'constellation']
+function liveBrief() {
+  const n = $('editName') ? $('editName').value.trim() : '';
+  const t = $('editDescriptor') ? $('editDescriptor').value.trim() : null;
+  return {
+    brand: n || state.brief.brand || 'YOUR BRAND',
+    descriptor: t != null ? t : (state.brief.descriptor || '')
   };
-  const opts = map[industry] || ['geo', 'organic', 'ribbon', 'constellation', 'blade', 'nest', 'arcgrid', 'lettercut'];
-  return opts[Math.floor(rng() * opts.length)];
 }
 
-function symbolMarkup(kind, color, size, monogramLetter, gradientId) {
-  const s = size / 100;
-  const fill = gradientId ? `url(#${gradientId})` : color;
-  const g = (content) =>
-    `<g transform="translate(450 200) scale(${s})">${content}</g>`;
-
-  switch (kind) {
-    case 'none': return '';
-
-    case 'craft':
-    case 'designer': {
-      const seed = (state.brief && state.brief.brand ? state.brief.brand : 'BRAND')
-        + '|' + (state.activeConcept != null ? state.activeConcept : 0)
-        + '|' + (state.design._freeSeed || 0)
-        + '|' + (state.design._craftMethod || '');
-      return craftMark(
-        seed,
-        color,
-        size,
-        (state.brief && state.brief.industry) || '',
-        (state.brief && state.brief.personality) || ''
-      );
-    }
-
-    case 'freeform':
-    case 'procedural': {
-      const seed = (state.brief && state.brief.brand ? state.brief.brand : 'BRAND')
-        + '|' + (state.activeConcept != null ? state.activeConcept : 0)
-        + '|' + (state.design._freeSeed || 0)
-        + '|' + (state.design._freeStyle || '');
-      const style = state.design._freeStyle || freeformStyleForIndustry(
-        (state.brief && state.brief.industry) || '',
-        seededRng(seed + '|pick')
-      );
-      return proceduralMark(seed, color, size, style);
-    }
-
-    case 'building':
-      return g(`<rect x="-28" y="-50" width="18" height="70" fill="${fill}"/><rect x="-6" y="-62" width="22" height="82" fill="${fill}"/><rect x="20" y="-40" width="16" height="60" fill="${fill}"/><rect x="-22" y="-42" width="5" height="5" fill="#fff" opacity=".85"/><rect x="-22" y="-28" width="5" height="5" fill="#fff" opacity=".85"/><rect x="-22" y="-14" width="5" height="5" fill="#fff" opacity=".85"/><rect x="0" y="-50" width="5" height="5" fill="#fff" opacity=".85"/><rect x="0" y="-36" width="5" height="5" fill="#fff" opacity=".85"/><rect x="0" y="-22" width="5" height="5" fill="#fff" opacity=".85"/><rect x="26" y="-30" width="4" height="4" fill="#fff" opacity=".85"/><rect x="-4" y="8" width="12" height="12" fill="${fill}"/>`);
-
-    case 'skyline':
-      return g(`<path d="M-70 30 L-70 -10 L-55 -10 L-55 -35 L-40 -35 L-40 -5 L-28 -5 L-28 -45 L-12 -55 L-12 -5 L0 -5 L0 -70 L8 -70 L8 -5 L20 -5 L20 -40 L32 -40 L32 -15 L48 -15 L48 -50 L58 -50 L58 -20 L70 -20 L70 30 Z" fill="${fill}"/><rect x="-6" y="-60" width="3" height="3" fill="#fff" opacity=".7"/><rect x="2" y="-60" width="3" height="3" fill="#fff" opacity=".7"/>`);
-
-    case 'house':
-      return g(`<path d="M0 -55 L55 0 L40 0 L40 40 L-40 40 L-40 0 L-55 0 Z" fill="${fill}"/><rect x="-12" y="8" width="24" height="32" fill="#fff" opacity=".9"/><rect x="-28" y="5" width="12" height="12" fill="#fff" opacity=".75"/><rect x="16" y="5" width="12" height="12" fill="#fff" opacity=".75"/>`);
-
-    case 'key':
-      return g(`<circle cx="-22" cy="-8" r="22" fill="none" stroke="${color}" stroke-width="8"/><circle cx="-22" cy="-8" r="10" fill="none" stroke="${color}" stroke-width="5"/><rect x="-4" y="-14" width="55" height="12" rx="3" fill="${fill}"/><rect x="38" y="-14" width="8" height="22" fill="${fill}"/><rect x="28" y="-14" width="8" height="18" fill="${fill}"/>`);
-
-    case 'columns':
-      return g(`<rect x="-50" y="25" width="100" height="8" fill="${fill}"/><rect x="-45" y="-45" width="12" height="70" fill="${fill}"/><rect x="-6" y="-45" width="12" height="70" fill="${fill}"/><rect x="33" y="-45" width="12" height="70" fill="${fill}"/><path d="M-55 -45 L-55 -55 L55 -55 L55 -45 Z" fill="${fill}"/><path d="M-40 -55 L0 -75 L40 -55 Z" fill="${fill}"/>`);
-
-    case 'roof':
-      return g(`<path d="M0 -60 L70 20 L50 20 L50 45 L-50 45 L-50 20 L-70 20 Z" fill="${fill}"/><path d="M-25 0 L0 -30 L25 0 Z" fill="#fff" opacity=".25"/>`);
-
-    case 'nodes':
-      // Network / SaaS connectivity
-      return g(`<circle cx="-35" cy="-25" r="12" fill="${fill}"/><circle cx="35" cy="-25" r="12" fill="${fill}"/><circle cx="0" cy="30" r="12" fill="${fill}"/><circle cx="0" cy="-5" r="9" fill="${fill}"/><line x1="-35" y1="-25" x2="0" y2="-5" stroke="${color}" stroke-width="4"/><line x1="35" y1="-25" x2="0" y2="-5" stroke="${color}" stroke-width="4"/><line x1="0" y1="-5" x2="0" y2="30" stroke="${color}" stroke-width="4"/>`);
-
-    case 'circuit':
-      return g(`<rect x="-50" y="-8" width="100" height="16" rx="2" fill="${fill}"/><rect x="-8" y="-50" width="16" height="100" rx="2" fill="${fill}"/><circle cx="-50" cy="0" r="10" fill="${fill}"/><circle cx="50" cy="0" r="10" fill="${fill}"/><circle cx="0" cy="-50" r="10" fill="${fill}"/><circle cx="0" cy="50" r="10" fill="${fill}"/><circle cx="0" cy="0" r="14" fill="#fff" opacity=".25"/>`);
-
-    case 'growth':
-      // Finance / analytics bars
-      return g(`<rect x="-48" y="10" width="18" height="40" fill="${fill}" opacity=".7"/><rect x="-22" y="-10" width="18" height="60" fill="${fill}" opacity=".85"/><rect x="4" y="-30" width="18" height="80" fill="${fill}"/><rect x="30" y="-50" width="18" height="100" fill="${fill}"/><path d="M-40 5 L-10 -15 L15 -5 L40 -40" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".9"/>`);
-
-    case 'coin':
-      return g(`<circle r="52" fill="none" stroke="${color}" stroke-width="6"/><circle r="40" fill="none" stroke="${color}" stroke-width="3"/><text x="0" y="14" text-anchor="middle" fill="${color}" stroke="none" font-family="Georgia,serif" font-size="36" font-weight="700">$</text>`);
-
-    case 'pulse':
-      return g(`<path d="M-60 0 L-30 0 L-18 -28 L-5 32 L10 -40 L25 0 L60 0" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="-60" cy="0" r="6" fill="${fill}"/><circle cx="60" cy="0" r="6" fill="${fill}"/>`);
-
-    case 'droplet':
-      return g(`<path d="M0 -55 C20 -25 35 0 35 20 C35 40 20 55 0 55 C-20 55 -35 40 -35 20 C-35 0 -20 -25 0 -55Z" fill="${fill}"/><ellipse cx="0" cy="18" rx="12" ry="14" fill="#fff" opacity=".2"/>`);
-
-    case 'flame':
-      return g(`<path d="M0 50 C-30 50 -40 20 -28 -10 C-20 10 -5 5 0 -45 C8 0 22 5 30 -5 C40 25 30 50 0 50Z" fill="${fill}"/><path d="M0 50 C-12 50 -18 30 -10 10 C-5 22 3 20 0 -5 C5 18 12 22 14 12 C18 30 12 50 0 50Z" fill="#fff" opacity=".3"/>`);
-
-    case 'cup':
-      return g(`<path d="M-30 -20 L-25 35 Q-25 48 0 48 Q25 48 25 35 L30 -20 Z" fill="${fill}"/><ellipse cx="0" cy="-20" rx="32" ry="10" fill="${fill}"/><path d="M30 -10 Q48 -10 48 8 Q48 22 30 22" fill="none" stroke="${color}" stroke-width="5"/><path d="M-12 -35 Q-5 -48 5 -35" fill="none" stroke="${color}" stroke-width="3" opacity=".7"/><path d="M2 -38 Q8 -50 14 -36" fill="none" stroke="${color}" stroke-width="3" opacity=".7"/>`);
-
-    case 'bolt':
-      return g(`<path d="M10 -55 L-25 5 L5 5 L-10 55 L35 -5 L5 -5 Z" fill="${fill}"/>`);
-
-    case 'chevron':
-      return g(`<path d="M-45 -35 L0 0 L-45 35 L-30 35 L15 0 L-30 -35 Z" fill="${fill}"/><path d="M-10 -35 L35 0 L-10 35 L5 35 L50 0 L5 -35 Z" fill="${fill}" opacity=".55"/>`);
-
-    case 'target':
-      return g(`<circle r="52" fill="none" stroke="${color}" stroke-width="5"/><circle r="34" fill="none" stroke="${color}" stroke-width="5"/><circle r="16" fill="${fill}"/>`);
-
-    case 'book':
-      return g(`<path d="M0 -45 L-48 -38 L-48 40 Q-24 50 0 42 Q24 50 48 40 L48 -38 Z" fill="${fill}"/><path d="M0 -45 L0 42" stroke="#fff" stroke-width="3" opacity=".5"/><path d="M-30 -20 H-10" stroke="#fff" stroke-width="3" opacity=".4"/><path d="M-30 -5 H-10" stroke="#fff" stroke-width="3" opacity=".4"/>`);
-
-    case 'crest':
-      return g(`<path d="M0 -58 L48 -42 L48 10 C48 40 24 58 0 68 C-24 58 -48 40 -48 10 L-48 -42 Z" fill="${fill}"/><path d="M0 -40 L28 -28 L28 8 C28 28 14 40 0 48 C-14 40 -28 28 -28 8 L-28 -28 Z" fill="#fff" opacity=".15"/><circle cx="0" cy="0" r="10" fill="#fff" opacity=".35"/>`);
-
-    case 'ring':
-      return g(`<circle r="48" fill="none" stroke="${color}" stroke-width="9"/><circle r="32" fill="none" stroke="${color}" stroke-width="2.5" opacity=".4"/><circle r="12" fill="${fill}" opacity=".9"/>`);
-
-    case 'petal':
-      return g(`<ellipse cx="0" cy="-28" rx="16" ry="32" fill="${fill}" transform="rotate(0)"/><ellipse cx="0" cy="-28" rx="16" ry="32" fill="${fill}" transform="rotate(72)" opacity=".9"/><ellipse cx="0" cy="-28" rx="16" ry="32" fill="${fill}" transform="rotate(144)" opacity=".8"/><ellipse cx="0" cy="-28" rx="16" ry="32" fill="${fill}" transform="rotate(216)" opacity=".9"/><ellipse cx="0" cy="-28" rx="16" ry="32" fill="${fill}" transform="rotate(288)" opacity=".85"/><circle r="12" fill="#fff" opacity=".35"/>`);
-
-    case 'arrow':
-      return g(`<path d="M-50 8 L20 8 L20 28 L55 0 L20 -28 L20 -8 L-50 -8 Z" fill="${fill}"/>`);
-
-    case 'hexagon':
-      return g(`<path d="M0 -52 L45 -26 V26 L0 52 L-45 26 V-26Z" fill="${fill}"/><path d="M0 -28 L24 -14 V14 L0 28 L-24 14 V-14Z" fill="#fff" opacity=".18"/>`);
-
-    case 'orbit':
-      return g(`<circle r="50" fill="none" stroke="${color}" stroke-width="3"/><ellipse rx="74" ry="26" transform="rotate(-30)" fill="none" stroke="${color}" stroke-width="2.5"/><ellipse rx="74" ry="26" transform="rotate(30)" fill="none" stroke="${color}" stroke-width="2.5"/><circle cx="40" cy="-30" r="6" fill="${fill}"/>`);
-
-    case 'diamond':
-      return g(`<path d="M0 -52 L46 0 0 52 -46 0Z" fill="${fill}"/><path d="M0 -28 L24 0 0 28 -24 0Z" fill="#fff" opacity=".14"/><path d="M0 -52 L46 0 0 52 -46 0Z" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="1"/>`);
-
-    case 'leaf':
-      return g(`<path d="M0 54 C-72 10 -48 -64 46 -64 C52 16 28 46 0 54Z" fill="${fill}"/><path d="M-1 50 Q5 0 38 -40" fill="none" stroke="#fff" stroke-width="2" opacity=".5"/>`);
-
-    case 'shield':
-      return g(`<path d="M0 -58 L48 -38 V6 C48 34 26 54 0 62 C-26 54 -48 34 -48 6 V-38Z" fill="${fill}"/><path d="M0 -36 L26 -24 V2 C26 22 12 34 0 40 C-12 34 -26 22 -26 2 V-24Z" fill="#fff" opacity=".15"/>`);
-
-    case 'monogram': {
-      const letter = (monogramLetter || 'N').charAt(0).toUpperCase();
-      return g(`<rect x="-56" y="-56" width="112" height="112" rx="10" fill="${fill}"/>
-        <rect x="-48" y="-48" width="96" height="96" rx="6" fill="none" stroke="#fff" stroke-opacity="0.18" stroke-width="1.2"/>
-        <text x="0" y="20" text-anchor="middle" fill="#ffffff" stroke="none"
-          font-family="Georgia, 'Times New Roman', 'Palatino Linotype', serif"
-          font-size="68" font-weight="600" letter-spacing="-1">${escapeXml(letter)}</text>`);
-    }
-
-    case 'wave':
-      return g(`<path d="M-60 10 Q-30 -40 0 10 Q30 55 60 10 L60 35 Q30 70 0 35 Q-30 -5 -60 35 Z" fill="${fill}"/>`);
-
-    case 'abstract':
-      return g(`<path d="M-44 -18 Q-8 -66 36 -28 Q64 8 18 46 Q-26 64 -46 18 Q-64 -18 -44 -18Z" fill="${fill}"/><circle cx="6" cy="-6" r="14" fill="#fff" opacity=".2"/>`);
-
-    case 'star':
-    default:
-      return g(`<path d="M0 -58 L10 -12 58 0 10 11 0 58 -10 11 -58 0 -10 -12Z" fill="${fill}"/><circle r="8" fill="#fff" opacity=".25"/>`);
-  }
+function designForEngine() {
+  const d = { ...state.design };
+  if (d.font) d.fontCss = d.font;
+  return d;
 }
 
 function buildSvg() {
-  const d = state.design;
-  const rawName = ($('editName')?.value || state.brief.brand || 'YOUR BRAND').trim();
-  const rawDesc = ($('editDescriptor')?.value || state.brief.descriptor || '').trim();
-  const name = escapeXml(rawName);
-  const desc = escapeXml(rawDesc);
-  const c = d.primary;
-  const sub = d.secondary;
-  const accent = d.accent;
-  // Premium type: prefer refined stacks
-  let font = d.font || "Georgia, 'Times New Roman', serif";
-  const weight = d.fontWeight || '600';
-  const comp = d.composition;
-  const scale = (d.scale || 100) / 100;
-  // Design-school tracking: optical letter-spacing by name length
-  let tracking = d.tracking != null ? d.tracking : 4;
-  if (d.tracking == null || d.tracking === 0) {
-    if (rawName.length <= 5) tracking = 6;
-    else if (rawName.length <= 10) tracking = 4;
-    else if (rawName.length <= 16) tracking = 2;
-    else tracking = 1;
-  }
-  const offsetY = d.offsetY || 0;
-  const offsetX = d.offsetX || 0;
-  const monogramLetter = rawName.charAt(0);
+  const r = Engine.render(designForEngine(), liveBrief(), { bg: artboardBg(), idPrefix: 'ed' });
+  state.lastWarnings = r.warnings;
+  state.lastBBox = r.bbox;
+  return r.svg;
+}
 
-  // Refined gradients — soft, premium stops
-  let gradientDef = '';
-  let gradientId = '';
-  if (d.gradientMode === 'linear') {
-    gradientId = 'markGrad';
-    gradientDef = `<linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="${c}"/><stop offset="55%" stop-color="${c}"/>
-      <stop offset="100%" stop-color="${accent}"/></linearGradient>`;
-  } else if (d.gradientMode === 'radial') {
-    gradientId = 'markGrad';
-    gradientDef = `<radialGradient id="${gradientId}" cx="42%" cy="38%" r="65%">
-      <stop offset="0%" stop-color="${accent}"/><stop offset="70%" stop-color="${c}"/>
-      <stop offset="100%" stop-color="${c}"/></radialGradient>`;
-  }
-
-  // Optical type size by composition + name length
-  let nameSize = 52;
-  if (rawName.length > 14) nameSize = 42;
-  else if (rawName.length > 10) nameSize = 46;
-  else if (rawName.length <= 5) nameSize = 58;
-  if (comp === 'wordmark') nameSize = Math.round(nameSize * 1.12);
-  if (comp === 'monogram') nameSize = Math.round(nameSize * 0.88);
-
-  const symbol = symbolMarkup(d.symbol, c, d.symbolSize || 100, monogramLetter, gradientId || null);
-
-  // Premium vertical rhythm (golden-ish spacing)
-  let nameY = 372 + offsetY;
-  let descY = 412 + offsetY;
-  let symbolOffset = `translate(${offsetX} 8)`;
-  let textTransform = `translate(${450 + offsetX} 0) scale(${scale}) translate(-450 0)`;
-
-  if (comp === 'horizontal') {
-    nameY = 298 + offsetY;
-    descY = 338 + offsetY;
-    symbolOffset = `translate(${-155 + offsetX} 78)`;
-    textTransform = `translate(${505 + offsetX} 0) scale(${scale}) translate(-450 0)`;
-  } else if (comp === 'wordmark') {
-    nameY = 292 + offsetY;
-    descY = 338 + offsetY;
-  } else if (comp === 'seal') {
-    nameY = 392 + offsetY;
-    descY = 430 + offsetY;
-  } else if (comp === 'monogram') {
-    nameY = 400 + offsetY;
-    descY = 438 + offsetY;
-  }
-
-  // Elegant double-ring seal with refined stroke weights
-  const seal = comp === 'seal'
-    ? `<circle cx="450" cy="278" r="198" fill="none" stroke="${c}" stroke-width="1.25" stroke-opacity="0.9"/>
-       <circle cx="450" cy="278" r="186" fill="none" stroke="${c}" stroke-opacity="0.22" stroke-width="0.9"/>
-       <circle cx="450" cy="278" r="172" fill="none" stroke="${sub}" stroke-opacity="0.18" stroke-width="0.7"/>`
-    : '';
-
-  const mark = (comp === 'wordmark') ? '' : `<g transform="${symbolOffset}">${symbol}</g>`;
-
-  // Descriptor: small caps feel via tracking + refined rule
-  const descBlock = desc
-    ? `<path d="M360 ${descY - 20} H540" stroke="${sub}" stroke-opacity="0.35" stroke-width="0.85"/>
-       <text x="450" y="${descY}" text-anchor="middle" fill="${sub}"
-             font-family="'Segoe UI', system-ui, sans-serif" font-size="11" font-weight="500"
-             letter-spacing="3.5" opacity="0.92">${desc.toUpperCase()}</text>`
-    : '';
-
-  // Subtle premium background wash for canvas (not exported as brand bg)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" role="img" aria-label="${name} logo">
-  <defs>
-    ${gradientDef}
-    <filter id="softDepth" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="${c}" flood-opacity="0.08"/>
-    </filter>
-  </defs>
-  <title>${name} logo</title>
-  <g id="seal">${seal}</g>
-  <g id="symbol" filter="url(#softDepth)">${mark}</g>
-  <g id="wordmark" transform="${textTransform}">
-    <text x="450" y="${nameY}" text-anchor="middle" fill="${c}"
-          font-family="${font}" font-size="${nameSize}" font-weight="${weight}"
-          letter-spacing="${tracking}" style="text-rendering:geometricPrecision">${name}</text>
-    ${descBlock}
-  </g>
-</svg>`;
+/** Tight-cropped SVG for export (the artboard is only a working canvas). */
+function exportGeometry(padRatio = 0.1) {
+  const svg = buildSvg();
+  const b = state.lastBBox;
+  const pad = Math.max(b.w, b.h) * padRatio;
+  const vx = b.x - pad, vy = b.y - pad, vw = b.w + pad * 2, vh = b.h + pad * 2;
+  const out = svg.replace('viewBox="0 0 900 600"',
+    `viewBox="${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}" width="${Math.round(vw * 2)}" height="${Math.round(vh * 2)}"`);
+  return { svg: out, vw, vh };
 }
 
 // ─────────────────────────────────────────────
 // QUALITY + RENDER
 // ─────────────────────────────────────────────
+function iconLabel(id) {
+  if (!id || id === 'none') return 'None';
+  return (IconLib.ICONS[id] && IconLib.ICONS[id].label) || id;
+}
+
 function updateQuality() {
   const d = state.design;
-  let bg = '#ffffff';
-  if (d.background === 'dark') bg = '#1a1f28';
-  else if (d.background === 'custom') bg = d.customBg || '#f7f5f0';
+  const bg = artboardBg();
   const ratio = contrastRatio(d.primary, bg);
-  const name = ($('editName')?.value || '').trim();
+  const brief = liveBrief();
   const items = [];
 
   if (ratio >= 4.5) items.push(['good', `✓ Strong contrast (${ratio.toFixed(1)}:1)`]);
   else if (ratio >= 3) items.push(['warn', `! Moderate contrast (${ratio.toFixed(1)}:1)`]);
-  else items.push(['bad', `✗ Low contrast (${ratio.toFixed(1)}:1)`]);
+  else items.push(['bad', `✗ Low contrast (${ratio.toFixed(1)}:1) — the engine lightens the ink automatically`]);
 
-  if (!name) items.push(['bad', '✗ Brand name is empty']);
-  else if (name.length > 22) items.push(['warn', '! Long name — consider smaller type or stacked layout']);
+  if (!($('editName') && $('editName').value.trim())) items.push(['bad', '✗ Brand name is empty']);
+  else if (brief.brand.length > 22) items.push(['warn', '! Long name — consider a stacked or ribbon layout']);
   else items.push(['good', '✓ Brand name length suitable']);
 
-  if (d.symbol === 'none' && d.composition !== 'wordmark') {
-    items.push(['warn', '! No symbol — consider wordmark composition']);
-  } else {
-    items.push(['good', '✓ Composition coherent']);
+  (state.lastWarnings || []).forEach(w => items.push(['warn', '! ' + w]));
+
+  if (state.lastBBox) {
+    const b = state.lastBBox;
+    const margin = Math.min(b.x, 900 - (b.x + b.w), b.y, 600 - (b.y + b.h));
+    if (margin < 24) items.push(['warn', '! Logo is very close to the artboard edge']);
+    else items.push(['good', '✓ Clear space around the logo']);
   }
 
-  // Classic design principles checklist
-  items.push(['good', '✓ Simplicity — limited forms (design school rule)']);
-  if ((d.gradientMode || 'none') === 'none') {
-    items.push(['good', '✓ Flat color — prints clean, scales forever']);
-  } else {
-    items.push(['warn', '! Gradient — verify one-color / small-size versions']);
-  }
-  const nameLen = ($('editName')?.value || '').trim().length;
-  if (nameLen > 0 && nameLen <= 12) {
-    items.push(['good', '✓ Name length supports memorability']);
-  }
-  if (d.symbol === 'craft' || d.symbol === 'monogram' || d.symbol === 'freeform') {
-    items.push(['good', '✓ Mark constructed from geometry / craft method']);
-  }
+  if ((d.gradientMode || 'none') === 'none') items.push(['good', '✓ Flat colour — prints clean, scales forever']);
+  else items.push(['warn', '! Gradient — check one-colour and small-size versions']);
 
+  const uniq = new Set([d.primary, d.secondary, d.accent].map(c => String(c).toLowerCase())).size;
+  items.push([uniq <= 3 ? 'good' : 'warn', `${uniq <= 3 ? '✓' : '!'} ${uniq} brand colour${uniq === 1 ? '' : 's'}`]);
   items.push(['good', '✓ Pure vector — scales infinitely']);
-  items.push(['good', '✓ Single-colour version remains legible']);
 
-  $('qualityList').innerHTML = items.map(([cls, txt]) => `<li class="${cls}">${txt}</li>`).join('');
+  $('qualityList').innerHTML = items.map(([cls, txt]) => `<li class="${cls}">${escapeXml(txt)}</li>`).join('');
   const issues = items.filter(x => x[0] !== 'good').length;
   $('qualityCount').textContent = issues === 0 ? 'Clean' : issues + (issues === 1 ? ' issue' : ' issues');
   $('contrastText').textContent = ratio >= 4.5
@@ -1005,271 +437,405 @@ function updateQuality() {
 
 function render() {
   const svgStr = buildSvg();
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgStr, 'image/svg+xml');
+  const doc = new DOMParser().parseFromString(svgStr, 'image/svg+xml');
+  if (doc.querySelector('parsererror')) {
+    $('statusMsg').textContent = 'Could not draw the logo — check the brand text';
+    return;
+  }
   const newSvg = doc.documentElement;
   newSvg.id = 'logoSvg';
   const old = $('logoSvg');
-  if (old && old.parentNode) {
-    old.parentNode.replaceChild(document.importNode(newSvg, true), old);
-  }
+  if (old && old.parentNode) old.parentNode.replaceChild(document.importNode(newSvg, true), old);
 
   const artboard = $('artboard');
   artboard.classList.remove('dark', 'transparent');
+  artboard.style.background = '';
   if (state.design.background === 'dark') artboard.classList.add('dark');
   else if (state.design.background === 'transparent') artboard.classList.add('transparent');
-  else if (state.design.background === 'custom') {
-    artboard.style.background = state.design.customBg;
-  } else {
-    artboard.style.background = '';
-  }
+  else if (state.design.background === 'custom') artboard.style.background = state.design.customBg;
 
   updateQuality();
   updateLayers();
   updateSwatches();
+  refreshSelection();
   $('canvasStatus').textContent = `Ready · Vector 900×600 · ${state.zoom}%`;
+  if (!state._restoring) scheduleHistory();
 }
+
+// ─────────────────────────────────────────────
+// LAYERS + SELECTION (click a layer or the logo itself)
+// ─────────────────────────────────────────────
+const LAYER_ORDER = ['wordmark', 'tagline', 'symbol', 'ornament'];
 
 function updateLayers() {
   const list = $('layerList');
-  if (!list) return;
-  const d = state.design;
-  const layers = [];
-  if (d.symbol !== 'none' && d.composition !== 'wordmark') {
-    layers.push({ id: 'symbol', name: 'Symbol · ' + d.symbol });
-  }
-  layers.push({ id: 'wordmark', name: 'Wordmark · ' + (state.brief.brand || 'Text') });
-  if (d.composition === 'seal') layers.push({ id: 'seal', name: 'Seal rings' });
-
-  list.innerHTML = layers.map(l => `
-    <li class="layer-item ${state.selectedId === l.id ? 'selected' : ''}" data-id="${l.id}">
+  const svg = $('logoSvg');
+  if (!list || !svg) return;
+  const present = new Set([...svg.querySelectorAll('[data-layer]')].map(e => e.getAttribute('data-layer')));
+  const brief = liveBrief();
+  const names = {
+    wordmark: 'Wordmark · ' + brief.brand,
+    tagline: 'Tagline · ' + brief.descriptor,
+    symbol: 'Symbol · ' + (state.design.layout === 'monogram' ? 'Monogram' : iconLabel(state.design.icon)),
+    ornament: 'Ornaments & rules'
+  };
+  const layers = LAYER_ORDER.filter(id => present.has(id));
+  if (state.selectedId && !present.has(state.selectedId)) state.selectedId = null;
+  list.innerHTML = layers.map(id => `
+    <li class="layer-item ${state.selectedId === id ? 'selected' : ''}" data-id="${id}">
       <span class="vis">◉</span>
-      <span class="name">${escapeXml(l.name)}</span>
+      <span class="name">${escapeXml(names[id])}</span>
     </li>`).join('');
-
   list.querySelectorAll('.layer-item').forEach(el => {
-    el.addEventListener('click', () => {
-      state.selectedId = el.dataset.id;
-      updateLayers();
-      $('selectionInfo').textContent = 'Selected: ' + el.dataset.id;
-    });
+    el.addEventListener('click', () => selectLayer(el.dataset.id));
   });
 }
 
-// ─────────────────────────────────────────────
-// CONCEPT GENERATOR
-// ─────────────────────────────────────────────
-function generateConcepts() {
-  const brand = ($('brandName').value.trim() || 'BRAND');
-  const descriptor = $('descriptor').value.trim();
-  const industry = $('industry').value;
-  const personality = $('personality').value;
-  const paletteKey = $('palette').value;
-
-  state.brief = {
-    brand, descriptor, industry, personality,
-    palette: paletteKey,
-    notes: $('notes').value.trim()
-  };
-
-  const colors = PALETTES[paletteKey] || PALETTES['Navy & gold'] || ['#1a365d', '#c9a227', '#e8d48b'];
-  state.design.primary = colors[0];
-  state.design.secondary = colors[1];
-  state.design.accent = colors[2] || colors[0];
-  syncColorInputs();
-
-  const personalityMap = {
-    'Premium & minimal':   { compositions: ['stacked', 'wordmark', 'horizontal'], symbols: ['monogram', 'diamond', 'none', 'abstract', 'ring'] },
-    'Bold & modern':       { compositions: ['horizontal', 'stacked', 'monogram'], symbols: ['hexagon', 'chevron', 'abstract', 'bolt', 'nodes'] },
-    'Elegant & timeless':  { compositions: ['stacked', 'seal', 'wordmark'], symbols: ['columns', 'crest', 'diamond', 'none', 'ring'] },
-    'Warm & approachable': { compositions: ['stacked', 'horizontal'], symbols: ['leaf', 'ring', 'wave', 'monogram', 'droplet'] },
-    'Playful & expressive':{ compositions: ['stacked', 'monogram'], symbols: ['star', 'abstract', 'wave', 'target', 'petal'] },
-    'Heritage & established': { compositions: ['seal', 'stacked', 'wordmark'], symbols: ['crest', 'columns', 'shield', 'monogram', 'book'] },
-    'Technical & precise': { compositions: ['horizontal', 'wordmark'], symbols: ['hexagon', 'nodes', 'circuit', 'orbit', 'growth'] },
-    'Luxury & exclusive':  { compositions: ['seal', 'stacked', 'monogram'], symbols: ['diamond', 'crest', 'ring', 'none', 'petal'] }
-  };
-
-  const industrySymbols = {
-    'Technology / SaaS': ['nodes', 'circuit', 'hexagon', 'orbit', 'abstract', 'monogram', 'chevron'],
-    'Finance / Fintech': ['growth', 'coin', 'shield', 'diamond', 'monogram', 'ring', 'hexagon'],
-    'Real Estate / Housing': ['building', 'skyline', 'key', 'house', 'monogram', 'columns', 'roof'],
-    'Property Management': ['key', 'building', 'house', 'monogram', 'shield', 'ring'],
-    'Construction / Development': ['building', 'skyline', 'roof', 'hexagon', 'columns', 'chevron'],
-    'Architecture / Design': ['columns', 'diamond', 'building', 'monogram', 'abstract', 'hexagon'],
-    'Hospitality / Hotel': ['crest', 'key', 'monogram', 'star', 'ring', 'diamond'],
-    'Food & Beverage': ['flame', 'leaf', 'cup', 'wave', 'abstract', 'star'],
-    'Café / Coffee': ['cup', 'flame', 'leaf', 'ring', 'monogram', 'droplet'],
-    'Restaurant': ['flame', 'crest', 'leaf', 'cup', 'star', 'monogram'],
-    'Health / Medical': ['pulse', 'droplet', 'shield', 'leaf', 'ring', 'monogram'],
-    'Wellness / Fitness': ['bolt', 'pulse', 'leaf', 'target', 'chevron', 'ring'],
-    'Beauty / Salon': ['petal', 'leaf', 'diamond', 'wave', 'monogram', 'ring'],
-    'Fashion / Apparel': ['diamond', 'petal', 'monogram', 'abstract', 'star', 'wave'],
-    'Education / Training': ['book', 'crest', 'monogram', 'columns', 'star', 'ring'],
-    'Legal / Law': ['columns', 'crest', 'shield', 'monogram', 'diamond', 'book'],
-    'Consulting': ['nodes', 'diamond', 'monogram', 'growth', 'abstract', 'hexagon'],
-    'Sports / Team': ['bolt', 'chevron', 'target', 'star', 'shield', 'abstract'],
-    'Automotive': ['ring', 'shield', 'chevron', 'bolt', 'abstract', 'hexagon'],
-    'Logistics / Transport': ['arrow', 'chevron', 'hexagon', 'nodes', 'orbit', 'bolt'],
-    'Energy / Utilities': ['bolt', 'flame', 'orbit', 'hexagon', 'abstract', 'ring'],
-    'Agriculture': ['leaf', 'droplet', 'wave', 'shield', 'ring', 'monogram'],
-    'Nonprofit / NGO': ['ring', 'nodes', 'leaf', 'star', 'heart', 'monogram'],
-    'Church / Ministry': ['crest', 'shield', 'star', 'book', 'columns', 'ring'],
-    'Event / Entertainment': ['star', 'flame', 'target', 'abstract', 'ring', 'bolt'],
-    'Media / Creative': ['abstract', 'wave', 'diamond', 'monogram', 'star', 'hexagon'],
-    'Retail / E-commerce': ['diamond', 'hexagon', 'monogram', 'star', 'ring', 'bag'],
-    'Personal brand': ['monogram', 'abstract', 'star', 'diamond', 'none', 'ring'],
-    'Business / Company': ['monogram', 'diamond', 'shield', 'abstract', 'nodes', 'hexagon']
-  };
-
-  const map = personalityMap[personality] || personalityMap['Premium & minimal'];
-  let preferredSymbols = industrySymbols[industry] || map.symbols;
-  preferredSymbols = [...new Set([...preferredSymbols, ...map.symbols])].filter(s => s !== 'heart' && s !== 'bag' && s !== 'sun' && s !== 'torch' && s !== 'cross' && s !== 'tag');
-  // Designer craft first (traditional methods), then freeform, then industry symbols
-  preferredSymbols = ['craft', 'craft', 'craft', 'freeform', ...preferredSymbols, 'craft', 'monogram'];
-  if (state._aiSymbolBias && state._aiSymbolBias.length) {
-    preferredSymbols = [...new Set([...state._aiSymbolBias, ...preferredSymbols])];
-  }
-
-  // Unique style recipes — each concept is a full recipe, not just symbol swap
-  const styleRecipes = [
-    { composition: 'stacked', gradientMode: 'none', symbolSize: 100, tracking: 5, scale: 100, label: 'Classic stack' },
-    { composition: 'stacked', gradientMode: 'linear', symbolSize: 105, tracking: 3, scale: 98, label: 'Gradient stack' },
-    { composition: 'horizontal', gradientMode: 'none', symbolSize: 88, tracking: 6, scale: 100, label: 'Wide lockup' },
-    { composition: 'horizontal', gradientMode: 'none', symbolSize: 78, tracking: 4, scale: 94, label: 'Compact lockup' },
-    { composition: 'wordmark', gradientMode: 'none', symbolSize: 0, tracking: 7, scale: 108, label: 'Pure wordmark' },
-    { composition: 'wordmark', gradientMode: 'none', symbolSize: 0, tracking: 3, scale: 100, label: 'Tight wordmark' },
-    { composition: 'seal', gradientMode: 'none', symbolSize: 92, tracking: 5, scale: 92, label: 'Badge / seal' },
-    { composition: 'seal', gradientMode: 'radial', symbolSize: 96, tracking: 4, scale: 94, label: 'Emblem seal' },
-    { composition: 'monogram', gradientMode: 'none', symbolSize: 118, tracking: 4, scale: 88, label: 'Monogram focus' },
-    { composition: 'monogram', gradientMode: 'linear', symbolSize: 124, tracking: 2, scale: 86, label: 'Bold monogram' },
-    { composition: 'stacked', gradientMode: 'none', symbolSize: 86, tracking: 8, scale: 102, label: 'Airy stack' },
-    { composition: 'horizontal', gradientMode: 'radial', symbolSize: 96, tracking: 5, scale: 96, label: 'Soft radial' }
-  ];
-
-  const concepts = [];
-  const used = new Set();
-  let recipeIdx = 0;
-
-  // Pair each preferred symbol with multiple style recipes for maximum uniqueness
-  for (const sym of preferredSymbols) {
-    for (let r = 0; r < styleRecipes.length && concepts.length < 16; r++) {
-      const recipe = styleRecipes[(recipeIdx + r) % styleRecipes.length];
-      // wordmark ignores symbol
-      const effectiveSym = recipe.composition === 'wordmark' ? 'none' : sym;
-      const key = recipe.composition + '|' + effectiveSym + '|' + recipe.gradientMode + '|' + recipe.tracking;
-      if (used.has(key)) continue;
-      used.add(key);
-
-      let score = 74 + Math.floor(Math.random() * 22);
-      if (effectiveSym === preferredSymbols[0]) score += 4;
-      if (recipe.composition === 'seal' && (personality.includes('Heritage') || personality.includes('Luxury'))) score += 5;
-      if (recipe.composition === 'wordmark' && personality.includes('minimal')) score += 5;
-      if (recipe.gradientMode !== 'none' && personality.includes('Bold')) score += 3;
-      score = Math.max(72, Math.min(98, score));
-
-      const freeSeed = hashSeed(brand + '|' + concepts.length + '|' + effectiveSym + '|' + recipe.label + '|' + Math.random());
-      const freeStyle = effectiveSym === 'freeform'
-        ? freeformStyleForIndustry(industry, seededRng(String(freeSeed)))
-        : '';
-      const craftMethod = effectiveSym === 'craft'
-        ? pickCraftMethod(industry, personality, seededRng(String(freeSeed) + '|m'))
-        : '';
-      let label = recipe.label;
-      if (effectiveSym === 'craft') label = 'Craft · ' + craftMethod.replace(/_/g, ' ');
-      else if (effectiveSym === 'freeform') label = 'Freeform · ' + freeStyle;
-      const scoreBoost = (effectiveSym === 'craft') ? 5 : (effectiveSym === 'freeform' ? 2 : 0);
-      concepts.push({
-        id: concepts.length,
-        composition: recipe.composition,
-        symbol: effectiveSym,
-        primary: colors[0],
-        secondary: colors[1],
-        accent: colors[2] || colors[0],
-        gradientMode: recipe.gradientMode,
-        symbolSize: recipe.symbolSize || 100,
-        tracking: recipe.tracking,
-        scale: recipe.scale,
-        score: Math.min(98, score + scoreBoost),
-        label,
-        freeSeed,
-        freeStyle,
-        craftMethod
-      });
-    }
-    recipeIdx += 3;
-    if (concepts.length >= 16) break;
-  }
-
-  // Ensure pure wordmark always present
-  if (!concepts.some(c => c.composition === 'wordmark')) {
-    concepts.push({
-      id: concepts.length,
-      composition: 'wordmark', symbol: 'none',
-      primary: colors[0], secondary: colors[1], accent: colors[2] || colors[0],
-      gradientMode: 'none', symbolSize: 100, tracking: 6, scale: 105,
-      score: 80, label: 'Wordmark only'
-    });
-  }
-
-  concepts.sort((a, b) => b.score - a.score);
-  // Keep top 16 unique
-  state.concepts = concepts.slice(0, 16);
-  state.activeConcept = 0;
-  applyConcept(0);
-  renderConceptStrip();
-  $('statusMsg').textContent = `Generated ${state.concepts.length} unique directions — explore and refine`;
+function selectLayer(id) {
+  state.selectedId = state.selectedId === id ? null : id;
+  updateLayers();
+  refreshSelection();
 }
 
+function refreshSelection() {
+  const svg = $('logoSvg');
+  if (!svg) return;
+  svg.querySelectorAll('.sel-box').forEach(n => n.remove());
+  const info = $('selectionInfo');
+  if (!state.selectedId) { if (info) info.textContent = 'No selection'; return; }
+  const els = svg.querySelectorAll(`[data-layer="${state.selectedId}"]`);
+  if (!els.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  els.forEach(el => {
+    try {
+      const b = el.getBBox();
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
+    } catch (_) {}
+  });
+  if (!isFinite(x0)) return;
+  const r = document.createElementNS(SVG_NS, 'rect');
+  const pad = 6;
+  r.setAttribute('class', 'sel-box');
+  r.setAttribute('x', x0 - pad); r.setAttribute('y', y0 - pad);
+  r.setAttribute('width', x1 - x0 + pad * 2); r.setAttribute('height', y1 - y0 + pad * 2);
+  r.setAttribute('fill', 'none'); r.setAttribute('stroke', '#2a7de1');
+  r.setAttribute('stroke-width', '1.4'); r.setAttribute('stroke-dasharray', '5 4');
+  r.setAttribute('vector-effect', 'non-scaling-stroke'); r.setAttribute('pointer-events', 'none');
+  els[0].parentNode.appendChild(r);
+  if (info) info.textContent = 'Selected: ' + state.selectedId;
+}
 
-function applyConcept(index) {
-  const c = state.concepts[index];
-  if (!c) return;
-  state.activeConcept = index;
-  state.design.composition = c.composition;
-  state.design.symbol = c.symbol;
-  state.design.primary = c.primary;
-  state.design.secondary = c.secondary;
-  state.design.accent = c.accent;
-  state.design._freeSeed = c.freeSeed || 0;
-  state.design._freeStyle = c.freeStyle || '';
-  state.design._craftMethod = c.craftMethod || '';
-  if (c.gradientMode) state.design.gradientMode = c.gradientMode;
-  if (c.symbolSize) state.design.symbolSize = c.symbolSize;
-  if (c.tracking != null) state.design.tracking = c.tracking;
-  if (c.scale) state.design.scale = c.scale;
-  if ($('composition')) $('composition').value = c.composition;
-  if ($('symbolKind')) $('symbolKind').value = c.symbol;
-  if ($('gradientMode')) $('gradientMode').value = state.design.gradientMode || 'none';
-  if ($('symbolSize')) { $('symbolSize').value = state.design.symbolSize; $('symbolSizeVal').textContent = state.design.symbolSize + '%'; }
-  if ($('tracking')) { $('tracking').value = state.design.tracking; $('trackingVal').textContent = state.design.tracking; }
-  if ($('scale')) { $('scale').value = state.design.scale; $('scaleVal').textContent = state.design.scale + '%'; }
-  if ($('editName')) $('editName').value = state.brief.brand;
-  if ($('editDescriptor')) $('editDescriptor').value = state.brief.descriptor;
+// ─────────────────────────────────────────────
+// UI ⇄ STATE
+// ─────────────────────────────────────────────
+function fillSelect(id, entries, withBlank) {
+  const sel = $(id);
+  if (!sel) return;
+  sel.innerHTML = (withBlank ? `<option value="">${withBlank}</option>` : '') +
+    entries.map(([v, l]) => `<option value="${v}">${escapeXml(l)}</option>`).join('');
+}
+
+function populateEngineSelects() {
+  fillSelect('composition', Object.entries(Engine.LAYOUTS));
+  fillSelect('symbolKind', IconLib.iconList().map(i => [i.id, i.label]).concat([['none', 'None (wordmark only)']]));
+  fillSelect('frameKind', IconLib.frameList().map(f => [f.id, f.label]));
+  fillSelect('fillStyle', Object.entries(Engine.FILLS));
+  fillSelect('ornamentKind', Object.entries(IconLib.ORNAMENTS));
+  fillSelect('finishKind', Object.entries(Engine.FINISHES));
+  fillSelect('backdropKind', Object.entries(Engine.BACKDROPS));
+  fillSelect('secondKind', IconLib.iconList().filter(i => i.id !== 'monogram').map(i => [i.id, i.label]), 'None');
+  fillSelect('wordmarkStyle', Object.entries(Engine.WORDMARK_STYLES));
+}
+
+function syncUI() {
+  const d = state.design;
+  const set = (id, v) => { const el = $(id); if (el) el.value = v; };
+  set('editName', state.brief.brand || '');
+  set('editDescriptor', state.brief.descriptor || '');
+  set('fontFamily', d.font || '');
+  set('fontWeight', String(d.fontWeight));
+  set('caseStyle', d.caseStyle);
+  set('tracking', d.tracking); set('trackingVal', d.tracking);
+  if ($('trackingVal')) $('trackingVal').textContent = d.tracking;
+  set('scale', d.scale); if ($('scaleVal')) $('scaleVal').textContent = d.scale + '%';
+  set('symbolSize', d.symbolSize); if ($('symbolSizeVal')) $('symbolSizeVal').textContent = d.symbolSize + '%';
+  set('offsetY', d.offsetY); if ($('offsetYVal')) $('offsetYVal').textContent = d.offsetY;
+  set('offsetX', d.offsetX); if ($('offsetXVal')) $('offsetXVal').textContent = d.offsetX;
+  set('composition', d.layout);
+  set('symbolKind', d.icon || 'none');
+  set('frameKind', d.frame);
+  set('fillStyle', d.fill);
+  set('ornamentKind', d.ornament);
+  set('finishKind', d.finish || 'flat');
+  set('backdropKind', d.backdrop || 'none');
+  set('secondKind', d.badgeIcon || '');
+  set('wordmarkStyle', d.wordmarkStyle);
+  if ($('rolesSwap')) $('rolesSwap').checked = d.roles === 'swap';
+  set('gradientMode', d.gradientMode || 'none');
+  set('bgMode', d.background);
+  if ($('customBgRow')) $('customBgRow').hidden = d.background !== 'custom';
+  set('customBgColor', d.customBg); set('customBgHex', d.customBg);
+  document.querySelectorAll('.align-btn').forEach(b => b.classList.toggle('active', b.dataset.align === d.align));
   syncColorInputs();
+}
+
+// ─────────────────────────────────────────────
+// UNDO / REDO  (design + text snapshots)
+// ─────────────────────────────────────────────
+const hist = { stack: [], idx: -1, timer: null };
+
+function snapshot() {
+  const b = liveBrief();
+  return JSON.stringify({ brief: { brand: b.brand, descriptor: b.descriptor }, design: state.design });
+}
+function scheduleHistory() {
+  clearTimeout(hist.timer);
+  hist.timer = setTimeout(pushHistory, 350);
+  state.dirty = true;
+}
+function pushHistory() {
+  clearTimeout(hist.timer);
+  const s = snapshot();
+  if (hist.stack[hist.idx] === s) return;
+  hist.stack = hist.stack.slice(0, hist.idx + 1);
+  hist.stack.push(s);
+  if (hist.stack.length > 100) hist.stack.shift();
+  hist.idx = hist.stack.length - 1;
+}
+function restoreHistory(i) {
+  const o = JSON.parse(hist.stack[i]);
+  state.brief.brand = o.brief.brand;
+  state.brief.descriptor = o.brief.descriptor;
+  state.design = o.design;
+  state._restoring = true;
+  syncUI();
   render();
-  renderConceptStrip();
+  state._restoring = false;
+}
+function undo() {
+  pushHistory();
+  if (hist.idx > 0) { hist.idx--; restoreHistory(hist.idx); $('statusMsg').textContent = 'Undo'; }
+  else $('statusMsg').textContent = 'Nothing to undo';
+}
+function redo() {
+  clearTimeout(hist.timer);
+  if (hist.idx < hist.stack.length - 1) { hist.idx++; restoreHistory(hist.idx); $('statusMsg').textContent = 'Redo'; }
+  else $('statusMsg').textContent = 'Nothing to redo';
 }
 
-function renderConceptStrip() {
-  const container = $('concepts');
-  if (!container) return;
-  container.innerHTML = state.concepts.map((c, i) => {
-    const prev = { ...state.design };
-    state.design.composition = c.composition;
-    state.design.symbol = c.symbol;
-    state.design.primary = c.primary;
-    state.design.secondary = c.secondary;
-    state.design.accent = c.accent;
-    const mini = buildSvg().replace('viewBox="0 0 900 600"', 'viewBox="120 70 660 450"');
-    state.design = prev;
-    return `<div class="concept-card ${i === state.activeConcept ? 'active' : ''}" data-index="${i}">
-      ${mini}<span class="score">${c.score}</span></div>`;
-  }).join('');
-  container.querySelectorAll('.concept-card').forEach(card => {
-    card.addEventListener('click', () => applyConcept(+card.dataset.index));
+// ─────────────────────────────────────────────
+// CONCEPT GALLERY — 4 logos at a time, click to choose
+// ─────────────────────────────────────────────
+const FAV_KEY = 'markcraft-favs-v1';
+const gallery = { pages: [], page: 0, history: { keys: [], layouts: [], icons: [] }, sig: '' };
+let favs = (() => { try { return JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); } catch (_) { return []; } })();
+
+function saveFavs() {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(favs.slice(0, 24))); } catch (_) {}
+}
+
+function readBriefPanel() {
+  const paletteKey = $('palette').value;
+  let colors = PALETTES[paletteKey] || PALETTES['Navy & gold'];
+  if (paletteKey === 'Custom colours') colors = [state.design.primary, state.design.secondary, state.design.accent];
+  return {
+    brand: $('brandName').value.trim() || 'BRAND',
+    descriptor: $('descriptor').value.trim(),
+    industry: $('industry').value,
+    personality: $('personality').value,
+    notes: $('notes').value.trim(),
+    palette: colors.slice(),
+    paletteKey
+  };
+}
+
+function commitBrief(b) {
+  state.brief = {
+    brand: b.brand, descriptor: b.descriptor, industry: b.industry,
+    personality: b.personality, palette: b.paletteKey, notes: b.notes
+  };
+}
+
+function withColours(rec, colors) {
+  return { ...rec, primary: colors[0], secondary: colors[1], accent: colors[2] || colors[0] };
+}
+
+function generateRound() {
+  const b = readBriefPanel();
+  commitBrief(b);
+  const sig = [b.brand, b.industry, b.personality, b.notes, b.palette.join()].join('|');
+  if (sig !== gallery.sig) {
+    gallery.history = { keys: [], layouts: [], icons: [] };
+    gallery.pages = [];
+    gallery.sig = sig;
+  }
+  const recs = Engine.generate(b, { count: 4, history: gallery.history, bias: state._aiSymbolBias || [] });
+  recs.forEach(r => {
+    gallery.history.keys.push(Engine.keyOf(r));
+    gallery.history.layouts.push(r.layout);
+    gallery.history.icons.push(r.icon);
+  });
+  gallery.pages.push({ title: 'Fresh concepts', brief: b, items: recs.map(r => withColours(r, b.palette)) });
+  gallery.page = gallery.pages.length - 1;
+  showGallery();
+  $('statusMsg').textContent = `Round ${gallery.pages.length}: 4 new directions — click one to open it`;
+}
+
+function generateLike(rec) {
+  const pg = gallery.pages[gallery.page];
+  const b = pg ? pg.brief : readBriefPanel();
+  const vars = Engine.variations(rec, b, { count: 4 });
+  gallery.pages.push({ title: 'More like “' + rec.label + '”', brief: b, items: vars.map(r => withColours(r, b.palette)) });
+  gallery.page = gallery.pages.length - 1;
+  showGallery();
+}
+
+function tileSvg(rec, brief, idPrefix) {
+  const r = Engine.render(rec, { brand: brief.brand, descriptor: brief.descriptor }, { bg: artboardBg(), idPrefix });
+  const b = r.bbox;
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const w = Math.max(b.w * 1.12, b.h * 1.12 * 1.55);
+  const h = w / 1.55;
+  return r.svg.replace('viewBox="0 0 900 600"', `viewBox="${(cx - w / 2).toFixed(1)} ${(cy - h / 2).toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)}"`);
+}
+
+function isFav(rec) {
+  const k = Engine.keyOf(rec) + '|' + rec.primary + rec.secondary;
+  return favs.some(f => Engine.keyOf(f) + '|' + f.primary + f.secondary === k);
+}
+
+function renderGallery() {
+  const grid = $('galleryGrid');
+  if (!grid) return;
+  const pg = gallery.pages[gallery.page];
+  if (!pg) { grid.innerHTML = ''; return; }
+  const bg = artboardBg();
+  grid.innerHTML = pg.items.map((rec, i) => `
+    <div class="g-card" data-i="${i}">
+      <div class="g-art" style="background:${bg}" title="Click to open in the editor">${tileSvg(rec, pg.brief, 'g' + gallery.page + '-' + i)}</div>
+      <div class="g-bar">
+        <span class="g-label" title="${escapeXml(rec.label)}">${escapeXml(rec.label)}</span>
+        <button class="g-fav ${isFav(rec) ? 'on' : ''}" data-act="fav" title="Save to favourites">♥</button>
+        <button class="btn subtle tiny" data-act="like">More like this</button>
+        <button class="btn primary tiny" data-act="choose">Choose</button>
+      </div>
+    </div>`).join('');
+  $('galTitle').textContent = pg.title;
+  $('galPage').textContent = `Round ${gallery.page + 1} of ${gallery.pages.length}`;
+  $('galPrev').disabled = gallery.page <= 0;
+  $('galNext').disabled = gallery.page >= gallery.pages.length - 1;
+}
+
+function chooseConcept(rec, brief) {
+  const d = state.design;
+  Object.assign(d, {
+    layout: rec.layout, icon: rec.icon, frame: rec.frame, fill: rec.fill, ornament: rec.ornament,
+    finish: rec.finish || 'flat', backdrop: rec.backdrop || 'none', badgeIcon: rec.badgeIcon || '',
+    wordmarkStyle: rec.wordmarkStyle, fontKey: rec.fontKey, font: '', fontWeight: String(rec.fontWeight),
+    caseStyle: rec.caseStyle, tracking: rec.tracking, roles: rec.roles, gradientMode: rec.gradientMode || 'none',
+    symbolSize: rec.symbolSize || 100, scale: rec.scale || 100, offsetX: 0, offsetY: 0, align: 'center',
+    primary: rec.primary, secondary: rec.secondary, accent: rec.accent
+  });
+  if (brief) { state.brief.brand = brief.brand; state.brief.descriptor = brief.descriptor; }
+  state.selectedId = null;
+  syncUI();
+  showEditor();
+  render();
+  pushHistory();
+  $('statusMsg').textContent = `Opened “${rec.label}” — refine it on the right, or go back to Concepts`;
+}
+
+function currentRecipe() {
+  const d = state.design;
+  return {
+    v: 3, layout: d.layout, icon: d.icon, frame: d.frame, fill: d.fill, ornament: d.ornament,
+    finish: d.finish, backdrop: d.backdrop, badgeIcon: d.badgeIcon,
+    wordmarkStyle: d.wordmarkStyle, fontKey: d.fontKey, fontWeight: +d.fontWeight, tracking: d.tracking,
+    caseStyle: d.caseStyle, roles: d.roles, gradientMode: d.gradientMode, symbolSize: d.symbolSize, scale: d.scale,
+    primary: d.primary, secondary: d.secondary, accent: d.accent,
+    label: Engine.labelFor(d)
+  };
+}
+
+function toggleFavCurrent() {
+  const rec = currentRecipe();
+  const k = Engine.keyOf(rec) + '|' + rec.primary + rec.secondary;
+  const i = favs.findIndex(f => Engine.keyOf(f) + '|' + f.primary + f.secondary === k);
+  if (i >= 0) { favs.splice(i, 1); $('statusMsg').textContent = 'Removed from favourites'; }
+  else { favs.unshift(rec); $('statusMsg').textContent = 'Saved to favourites (kept between sessions)'; }
+  saveFavs();
+  renderFavs();
+  renderGallery();
+}
+
+function renderFavs() {
+  const c = $('concepts');
+  if (!c) return;
+  const strip = c.closest('.concept-strip');
+  if (strip) strip.classList.toggle('empty', !favs.length);
+  if (!favs.length) {
+    c.innerHTML = '<span class="hint">No favourites yet — tap ♥ on a concept to keep it here.</span>';
+    return;
+  }
+  const brief = liveBrief();
+  c.innerHTML = favs.map((f, i) => `
+    <div class="concept-card" data-i="${i}" title="${escapeXml(f.label || '')}">${tileSvg(f, brief, 'f' + i)}<button class="fav-x" data-i="${i}" title="Remove">×</button></div>`).join('');
+  c.querySelectorAll('.concept-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.classList.contains('fav-x')) {
+        favs.splice(+e.target.dataset.i, 1); saveFavs(); renderFavs(); renderGallery(); return;
+      }
+      chooseConcept(favs[+card.dataset.i], null);
+    });
   });
 }
 
+function showGallery() {
+  state.view = 'gallery';
+  $('gallery').hidden = false;
+  $('artboardWrap').hidden = true;
+  $('canvasFooter').hidden = true;
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === 'gallery'));
+  renderGallery();
+  renderFavs();
+}
+function showEditor() {
+  state.view = 'editor';
+  $('gallery').hidden = true;
+  $('artboardWrap').hidden = false;
+  $('canvasFooter').hidden = false;
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === 'editor'));
+  renderFavs();
+}
+
+function bindGallery() {
+  $('galMore').addEventListener('click', generateRound);
+  $('galPrev').addEventListener('click', () => { if (gallery.page > 0) { gallery.page--; renderGallery(); } });
+  $('galNext').addEventListener('click', () => { if (gallery.page < gallery.pages.length - 1) { gallery.page++; renderGallery(); } });
+  $('galleryGrid').addEventListener('click', e => {
+    const card = e.target.closest('.g-card');
+    if (!card) return;
+    const pg = gallery.pages[gallery.page];
+    const rec = pg.items[+card.dataset.i];
+    const act = e.target.closest('[data-act]');
+    if (act && act.dataset.act === 'fav') {
+      const k = Engine.keyOf(rec) + '|' + rec.primary + rec.secondary;
+      const idx = favs.findIndex(f => Engine.keyOf(f) + '|' + f.primary + f.secondary === k);
+      if (idx >= 0) favs.splice(idx, 1); else favs.unshift(rec);
+      saveFavs(); renderGallery(); renderFavs();
+      return;
+    }
+    if (act && act.dataset.act === 'like') { generateLike(rec); return; }
+    chooseConcept(rec, pg.brief);
+  });
+  document.querySelectorAll('.view-btn').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.view === 'gallery') { if (!gallery.pages.length) generateRound(); else showGallery(); }
+    else showEditor();
+  }));
+}
+
+// ─────────────────────────────────────────────
 // ─────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────
@@ -1287,91 +853,113 @@ function downloadBlob(blob, filename) {
 }
 
 function exportSvg() {
-  const svg = buildSvg();
-  downloadBlob(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }),
-    sanitizeFilename(state.brief.brand || 'logo') + '.svg');
-  $('statusMsg').textContent = 'SVG exported · Opens in Illustrator, Affinity, Inkscape, Figma';
+  const { svg } = exportGeometry();
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + svg;
+  downloadBlob(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }),
+    sanitizeFilename(liveBrief().brand) + '.svg');
+  $('statusMsg').textContent = 'SVG exported (tight crop) · text uses system fonts — install the same font, or convert text to outlines, when sharing';
 }
 
-function exportPng() {
-  const svg = buildSvg();
-  const res = prefs.pngRes || 2700;
-  const h = Math.round(res * (600 / 900));
-  const img = new Image();
-  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = res;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (state.design.background === 'dark') {
-      ctx.fillStyle = '#1a1f28';
-      ctx.fillRect(0, 0, res, h);
-    } else if (state.design.background === 'light' || state.design.background === 'custom') {
-      ctx.fillStyle = state.design.background === 'custom' ? state.design.customBg : '#ffffff';
-      ctx.fillRect(0, 0, res, h);
-    }
-    ctx.drawImage(img, 0, 0, res, h);
-    canvas.toBlob(blob => {
-      downloadBlob(blob, sanitizeFilename(state.brief.brand || 'logo') + '.png');
-      URL.revokeObjectURL(url);
-      $('statusMsg').textContent = `PNG exported @ ${res}×${h}`;
-    }, 'image/png');
-  };
-  img.src = url;
+/** Rasterise the tight-cropped logo. Resolves with a PNG Blob. */
+function rasterise(res, withBackground) {
+  return new Promise((resolve, reject) => {
+    const { svg, vw, vh } = exportGeometry();
+    const h = Math.round(res * (vh / vw));
+    const img = new Image();
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = res;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (withBackground && state.design.background !== 'transparent') {
+        ctx.fillStyle = artboardBg();
+        ctx.fillRect(0, 0, res, h);
+      }
+      ctx.drawImage(img, 0, 0, res, h);
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(url);
+        blob ? resolve({ blob, w: res, h }) : reject(new Error('PNG raster failed'));
+      }, 'image/png');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG raster failed')); };
+    img.src = url;
+  });
 }
 
-function exportPackage() {
+async function exportPng() {
+  try {
+    const res = Math.round((prefs.pngRes || 2700) * 0.75);
+    const { blob, w, h } = await rasterise(res, true);
+    downloadBlob(blob, sanitizeFilename(liveBrief().brand) + '.png');
+    $('statusMsg').textContent = `PNG exported @ ${w}×${h} (tight crop)`;
+  } catch (err) {
+    $('statusMsg').textContent = 'PNG failed: ' + (err.message || err);
+  }
+}
+
+async function exportPackage() {
   exportSvg();
-  setTimeout(exportPng, 350);
+  await new Promise(r => setTimeout(r, 350));
+  await exportPng();
   const d = state.design;
+  const b = liveBrief();
   const guidelines = `MARKCRAFT STUDIO — BRAND PACKAGE
 ================================
-Brand: ${state.brief.brand}
-Descriptor: ${state.brief.descriptor}
+Brand: ${b.brand}
+Descriptor: ${b.descriptor}
 Generated: ${new Date().toISOString().slice(0, 10)}
 
 COLOURS
-Primary (RGB): ${d.primary}
-Secondary (RGB): ${d.secondary}
-Accent (RGB): ${d.accent}
-Primary CMYK: ${rgbToCmyk(...hexToRgb(d.primary)).join(', ')}
-Secondary CMYK: ${rgbToCmyk(...hexToRgb(d.secondary)).join(', ')}
+Primary (RGB): ${d.primary}   CMYK: ${rgbToCmyk(...hexToRgb(d.primary)).join(', ')}
+Secondary (RGB): ${d.secondary}   CMYK: ${rgbToCmyk(...hexToRgb(d.secondary)).join(', ')}
+Accent (RGB): ${d.accent}   CMYK: ${rgbToCmyk(...hexToRgb(d.accent)).join(', ')}
 
 TYPOGRAPHY
-Typeface: ${d.font}
-Weight: ${d.fontWeight}
-Tracking: ${d.tracking}
+Typeface: ${d.font || (Engine.FONTS[d.fontKey] ? Engine.FONTS[d.fontKey].css : d.fontKey)}
+Weight: ${d.fontWeight}   Tracking: ${d.tracking}   Case: ${d.caseStyle}
 
 COMPOSITION
-Layout: ${d.composition}
-Symbol: ${d.symbol}
+Layout: ${Engine.LAYOUTS[d.layout] || d.layout}
+Symbol: ${iconLabel(d.icon)}   Frame: ${d.frame}   Fill: ${d.fill}   Ornament: ${d.ornament}
 Gradient: ${d.gradientMode}
 
 USAGE
 - Maintain clear space equal to the height of the primary initial.
 - Do not stretch, skew or recolour outside the provided palette.
-- For small sizes prefer icon-only or monogram versions.
+- For small sizes prefer the symbol or monogram on its own.
+- Text is live type set in system fonts. Install the same font on any machine that opens the SVG, or convert text to outlines first.
 - This package is a starting point. Trademark clearance is the client's responsibility.
 
 Files: SVG (editable vector) + PNG (high-resolution raster)
 `;
-  setTimeout(() => {
-    downloadBlob(new Blob([guidelines], { type: 'text/plain' }),
-      sanitizeFilename(state.brief.brand || 'brand') + '-guidelines.txt');
-    $('statusMsg').textContent = 'Brand package exported (SVG + PNG + guidelines)';
-  }, 700);
+  downloadBlob(new Blob([guidelines], { type: 'text/plain' }),
+    sanitizeFilename(b.brand) + '-guidelines.txt');
+  $('statusMsg').textContent = 'Brand package exported (SVG + PNG + guidelines)';
+}
+
+async function copySvg() {
+  try {
+    await navigator.clipboard.writeText(exportGeometry().svg);
+    $('statusMsg').textContent = 'SVG copied to clipboard';
+  } catch (_) {
+    $('statusMsg').textContent = 'Clipboard not available';
+  }
 }
 
 // ─────────────────────────────────────────────
-// PROJECT SAVE / LOAD
+// PROJECT SAVE / LOAD / AUTOSAVE
 // ─────────────────────────────────────────────
+const AUTOSAVE_KEY = 'markcraft-autosave-v3';
+let autosaveTimer = null;
+
 function getProjectData() {
+  const b = liveBrief();
   return {
     schemaVersion: state.schemaVersion,
     id: state.id,
     name: $('projectName').value || state.name,
-    brief: state.brief,
+    brief: { ...state.brief, brand: b.brand, descriptor: b.descriptor },
     design: { ...state.design },
     svg: buildSvg()
   };
@@ -1381,38 +969,52 @@ function saveProject() {
   const data = getProjectData();
   downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
     sanitizeFilename(data.name || 'project') + '.markcraft.json');
+  state.dirty = false;
+  try { localStorage.removeItem(AUTOSAVE_KEY); } catch (_) {}
   $('statusMsg').textContent = 'Project saved';
+}
+
+/** Bring projects saved by 1.0/1.1 (composition + symbol) into the new design model. */
+function migrateDesign(old) {
+  const d = { ...defaultDesign(), ...(old || {}) };
+  if (!old || !old.layout) {
+    const map = { stacked: 'stacked', horizontal: 'horizontal', wordmark: 'wordmark', seal: 'badge', monogram: 'monogram' };
+    d.layout = map[old && old.composition] || 'stacked';
+  }
+  if (!old || !old.icon) {
+    const s = old && old.symbol;
+    d.icon = !s ? 'monogram' : (IconLib.ALIASES[s] || s);
+    if (!IconLib.ICONS[d.icon] && d.icon !== 'none') d.icon = 'abstract';
+    if (!old || !old.frame) d.frame = d.layout === 'badge' ? 'circle' : (d.icon === 'monogram' ? 'circle' : 'none');
+  }
+  if (old && old.font && !old.fontKey) d.font = old.font;       // keep the user's explicit typeface
+  d.fontWeight = String(d.fontWeight || '600');
+  return d;
+}
+
+function loadProjectData(data) {
+  if (data.brief) state.brief = { ...state.brief, ...data.brief };
+  if (data.design) state.design = migrateDesign(data.design);
+  if (data.name) { state.name = data.name; $('projectName').value = data.name; }
+  $('brandName').value = state.brief.brand || '';
+  $('descriptor').value = state.brief.descriptor || '';
+  if (state.brief.industry) $('industry').value = state.brief.industry;
+  if (state.brief.personality) $('personality').value = state.brief.personality;
+  if (state.brief.palette && [...$('palette').options].some(o => o.value === state.brief.palette)) $('palette').value = state.brief.palette;
+  $('notes').value = state.brief.notes || '';
+  state.selectedId = null;
+  syncUI();
+  showEditor();
+  render();
+  pushHistory();
 }
 
 function loadProject(file) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      const data = JSON.parse(e.target.result);
-      if (data.brief) state.brief = data.brief;
-      if (data.design) state.design = { ...state.design, ...data.design };
-      if (data.name) {
-        state.name = data.name;
-        $('projectName').value = data.name;
-      }
-      $('brandName').value = state.brief.brand || '';
-      $('descriptor').value = state.brief.descriptor || '';
-      $('editName').value = state.brief.brand || '';
-      $('editDescriptor').value = state.brief.descriptor || '';
-      $('composition').value = state.design.composition;
-      $('symbolKind').value = state.design.symbol;
-      $('fontFamily').value = state.design.font;
-      $('fontWeight').value = state.design.fontWeight || '600';
-      $('tracking').value = state.design.tracking;
-      $('trackingVal').textContent = state.design.tracking;
-      $('scale').value = state.design.scale;
-      $('scaleVal').textContent = state.design.scale + '%';
-      $('symbolSize').value = state.design.symbolSize;
-      $('symbolSizeVal').textContent = state.design.symbolSize + '%';
-      $('bgMode').value = state.design.background;
-      $('gradientMode').value = state.design.gradientMode || 'none';
-      syncColorInputs();
-      render();
+      loadProjectData(JSON.parse(e.target.result));
+      state.dirty = false;
       $('statusMsg').textContent = 'Project loaded';
     } catch (err) {
       $('statusMsg').textContent = 'Failed to load project';
@@ -1420,6 +1022,107 @@ function loadProject(file) {
     }
   };
   reader.readAsText(file);
+}
+
+function setupAutosave() {
+  clearInterval(autosaveTimer);
+  if (!(prefs.autosave > 0)) return;
+  autosaveTimer = setInterval(writeAutosave, prefs.autosave * 1000);
+}
+function writeAutosave() {
+  if (!state.dirty || !(prefs.autosave > 0)) return;
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ at: Date.now(), data: getProjectData() }));
+    $('statusMsg').textContent = 'Autosaved ' + new Date().toLocaleTimeString();
+  } catch (_) {}
+}
+function offerAutosaveRestore() {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return false;
+    const { at, data } = JSON.parse(raw);
+    if (confirm(`An autosaved project from ${new Date(at).toLocaleString()} was found.\nRestore it?`)) {
+      loadProjectData(data);
+      return true;
+    }
+    localStorage.removeItem(AUTOSAVE_KEY);
+  } catch (_) {}
+  return false;
+}
+
+// ─────────────────────────────────────────────
+// MENUS
+// ─────────────────────────────────────────────
+function closeMenus() { document.querySelectorAll('.menu-pop').forEach(m => m.remove()); }
+
+function openMenu(btn, items) {
+  closeMenus();
+  const pop = document.createElement('div');
+  pop.className = 'menu-pop';
+  items.forEach(it => {
+    if (it === '-') { pop.appendChild(Object.assign(document.createElement('hr'), {})); return; }
+    const b = document.createElement('button');
+    b.className = 'menu-item';
+    b.innerHTML = `<span>${escapeXml(it.label)}</span><kbd>${it.key ? escapeXml(it.key) : ''}</kbd>`;
+    b.addEventListener('click', () => { closeMenus(); it.run(); });
+    pop.appendChild(b);
+  });
+  const r = btn.getBoundingClientRect();
+  pop.style.left = r.left + 'px';
+  pop.style.top = (r.bottom + 4) + 'px';
+  document.body.appendChild(pop);
+  setTimeout(() => document.addEventListener('click', closeMenus, { once: true }), 0);
+}
+
+function applyView() {
+  $('artboard').style.transform = `translate(${state.pan.x}px, ${state.pan.y}px) scale(${state.zoom / 100})`;
+  $('zoomLabel').textContent = state.zoom + '%';
+  $('canvasStatus').textContent = `Ready · Vector 900×600 · ${state.zoom}%`;
+}
+function zoomBy(delta) { state.zoom = clamp(state.zoom + delta, 30, 300); applyView(); }
+function resetView() { state.zoom = 100; state.pan = { x: 0, y: 0 }; applyView(); }
+
+function resetAdjustments() {
+  Object.assign(state.design, { scale: 100, symbolSize: 100, offsetX: 0, offsetY: 0, align: 'center' });
+  syncUI();
+  render();
+}
+
+function menuFile() {
+  return [
+    { label: 'New project', run: () => $('newBtn').click() },
+    { label: 'Open…', run: () => $('openBtn').click() },
+    { label: 'Save', key: 'Ctrl+S', run: saveProject },
+    '-',
+    { label: 'Export SVG', key: 'Ctrl+E', run: exportSvg },
+    { label: 'Export PNG', run: exportPng },
+    { label: 'Brand package', run: exportPackage },
+    { label: 'Brand book PDF', run: exportPdfBrandBook }
+  ];
+}
+function menuEdit() {
+  return [
+    { label: 'Undo', key: 'Ctrl+Z', run: undo },
+    { label: 'Redo', key: 'Ctrl+Y', run: redo },
+    '-',
+    { label: 'Copy SVG to clipboard', run: copySvg },
+    { label: 'Save / remove favourite', run: toggleFavCurrent },
+    { label: 'Reset size & position', run: resetAdjustments }
+  ];
+}
+function menuView() {
+  return [
+    { label: 'Concepts (choose from 4)', run: () => { if (!gallery.pages.length) generateRound(); else showGallery(); } },
+    { label: 'Editor', run: showEditor },
+    '-',
+    { label: 'Zoom in', run: () => zoomBy(10) },
+    { label: 'Zoom out', run: () => zoomBy(-10) },
+    { label: 'Reset view', run: resetView },
+    { label: 'Toggle grid', run: () => $('gridToggle').click() },
+    { label: 'Cycle background', run: () => $('bgToggle').click() },
+    '-',
+    { label: 'Preferences…', run: openPrefs }
+  ];
 }
 
 // ─────────────────────────────────────────────
@@ -1459,6 +1162,7 @@ async function savePrefsFromUI() {
   if (prefs.grid === 'off') $('artboardWrap').classList.add('grid-off');
   else $('artboardWrap').classList.remove('grid-off');
   updateAiHint();
+  setupAutosave();
   closePrefs();
   $('statusMsg').textContent = 'Preferences saved';
 }
@@ -1505,8 +1209,8 @@ Notes: ${notes || 'none'}
 
 Invent 6 UNIQUE logo concept directions a demanding client would love. Avoid clichés and generic industry icons.
 For each concept list:
-1) Composition: stacked | horizontal | wordmark | seal | monogram
-2) Symbol keyword from: building, skyline, house, key, columns, roof, nodes, circuit, hexagon, growth, coin, pulse, droplet, flame, cup, leaf, bolt, chevron, target, book, crest, ring, petal, arrow, shield, diamond, orbit, wave, star, abstract, monogram, none
+1) Layout: stacked | horizontal | badge | banner | monogram | wordmark
+2) Symbol keyword from: ${Object.keys(IconLib.ICONS).join(', ')}
 3) Why it feels original (one short line)
 
 Push for unexpected but appropriate combinations. No generic house icons unless real-estate and only as one option.`;
@@ -1520,16 +1224,16 @@ Push for unexpected but appropriate combinations. No generic house icons unless 
       return;
     }
     const text = (res.text || '').toLowerCase();
-    const symKeys = ['building','skyline','house','key','columns','nodes','circuit','hexagon','growth','coin','pulse','droplet','flame','cup','leaf','bolt','chevron','target','book','crest','ring','petal','arrow','shield','diamond','orbit','wave','star','abstract','monogram','roof'];
+    const symKeys = Object.keys(IconLib.ICONS).filter(k => k !== 'monogram');
     const hintSyms = symKeys.filter(k => text.includes(k));
     if (hintSyms.length) state._aiSymbolBias = hintSyms;
-    generateConcepts();
+    generateRound();
     state._aiSymbolBias = null;
     const short = (res.text || '').trim().slice(0, 320).replace(/\s+/g, ' ');
     if ($('aiStatusHint') && short) {
       $('aiStatusHint').textContent = short + ((res.text || '').length > 320 ? '…' : '');
     }
-    $('statusMsg').textContent = 'AI-informed concepts ready — ' + state.concepts.length + ' unique directions';
+    $('statusMsg').textContent = 'AI-informed concepts ready — ' + '4 new directions in the gallery';
     console.log('AI concept response:\n', res.text);
   } catch (err) {
     $('statusMsg').textContent = 'AI failed: ' + (err.message || err);
@@ -1548,41 +1252,19 @@ async function exportPdfBrandBook() {
   }
   $('statusMsg').textContent = 'Building brand guidelines PDF…';
   try {
-    const svg = buildSvg();
-    const res = prefs.pngRes || 1800;
-    const h = Math.round(res * (600 / 900));
-    const pngBytes = await new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = res;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = state.design.background === 'dark' ? '#1a1f28' : '#ffffff';
-        ctx.fillRect(0, 0, res, h);
-        ctx.drawImage(img, 0, 0, res, h);
-        canvas.toBlob(async blob => {
-          URL.revokeObjectURL(url);
-          if (!blob) return reject(new Error('PNG raster failed'));
-          const buf = await blob.arrayBuffer();
-          resolve(Array.from(new Uint8Array(buf)));
-        }, 'image/png');
-      };
-      img.onerror = () => reject(new Error('SVG raster failed'));
-      img.src = url;
-    });
+    const png = await rasterise(prefs.pngRes || 1800, true);
+    const pngBytes = Array.from(new Uint8Array(await png.blob.arrayBuffer()));
 
     const d = state.design;
     const result = await window.markcraft.exportPdf({
-      brand: state.brief.brand || 'Brand',
-      descriptor: state.brief.descriptor || '',
+      brand: liveBrief().brand,
+      descriptor: liveBrief().descriptor,
       primary: d.primary,
       secondary: d.secondary,
       accent: d.accent,
-      fontName: d.font,
-      composition: d.composition,
-      symbol: d.symbol,
+      fontName: d.font || (Engine.FONTS[d.fontKey] ? Engine.FONTS[d.fontKey].label : d.fontKey),
+      composition: Engine.LAYOUTS[d.layout] || d.layout,
+      symbol: iconLabel(d.icon),
       primaryCmyk: rgbToCmyk(...hexToRgb(d.primary)),
       secondaryCmyk: rgbToCmyk(...hexToRgb(d.secondary)),
       pngBytes
@@ -1598,8 +1280,10 @@ async function exportPdfBrandBook() {
 }
 
 function bindEvents() {
-  $('generateBtn').addEventListener('click', generateConcepts);
+  $('generateBtn').addEventListener('click', generateRound);
+  bindGallery();
 
+  // ── text
   ['editName', 'editDescriptor'].forEach(id => {
     $(id).addEventListener('input', () => {
       state.brief.brand = $('editName').value;
@@ -1607,45 +1291,52 @@ function bindEvents() {
       render();
     });
   });
-
   $('fontFamily').addEventListener('change', e => { state.design.font = e.target.value; render(); });
   $('fontWeight').addEventListener('change', e => { state.design.fontWeight = e.target.value; render(); });
+  $('caseStyle').addEventListener('change', e => { state.design.caseStyle = e.target.value; render(); });
+  $('wordmarkStyle').addEventListener('change', e => { state.design.wordmarkStyle = e.target.value; render(); });
 
-  $('tracking').addEventListener('input', e => {
-    state.design.tracking = +e.target.value;
-    $('trackingVal').textContent = e.target.value;
-    render();
-  });
-  $('scale').addEventListener('input', e => {
-    state.design.scale = +e.target.value;
-    $('scaleVal').textContent = e.target.value + '%';
-    render();
-  });
-  $('symbolSize').addEventListener('input', e => {
-    state.design.symbolSize = +e.target.value;
-    $('symbolSizeVal').textContent = e.target.value + '%';
-    render();
-  });
-  $('offsetY').addEventListener('input', e => {
-    state.design.offsetY = +e.target.value;
-    $('offsetYVal').textContent = e.target.value;
-    render();
-  });
-  $('offsetX').addEventListener('input', e => {
-    state.design.offsetX = +e.target.value;
-    $('offsetXVal').textContent = e.target.value;
-    render();
-  });
+  const slider = (id, key, labelId, suffix = '') => {
+    $(id).addEventListener('input', e => {
+      state.design[key] = +e.target.value;
+      $(labelId).textContent = e.target.value + suffix;
+      render();
+    });
+  };
+  slider('tracking', 'tracking', 'trackingVal');
+  slider('scale', 'scale', 'scaleVal', '%');
+  slider('symbolSize', 'symbolSize', 'symbolSizeVal', '%');
+  slider('offsetY', 'offsetY', 'offsetYVal');
+  slider('offsetX', 'offsetX', 'offsetXVal');
 
-  $('composition').addEventListener('change', e => { state.design.composition = e.target.value; render(); });
-  $('symbolKind').addEventListener('change', e => { state.design.symbol = e.target.value; render(); });
-  $('gradientMode').addEventListener('change', e => { state.design.gradientMode = e.target.value; render(); });
+  // ── structure
+  const sel = (id, key) => $(id).addEventListener('change', e => {
+    state.design[key] = e.target.value === 'none' && key === 'icon' ? 'none' : e.target.value;
+    render();
+  });
+  sel('composition', 'layout');
+  sel('symbolKind', 'icon');
+  sel('secondKind', 'badgeIcon');
+  sel('frameKind', 'frame');
+  sel('fillStyle', 'fill');
+  sel('finishKind', 'finish');
+  sel('backdropKind', 'backdrop');
+  sel('ornamentKind', 'ornament');
+  sel('gradientMode', 'gradientMode');
+  $('rolesSwap').addEventListener('change', e => { state.design.roles = e.target.checked ? 'swap' : 'std'; render(); });
 
+  document.querySelectorAll('.align-btn').forEach(b => b.addEventListener('click', () => {
+    state.design.align = b.dataset.align;
+    document.querySelectorAll('.align-btn').forEach(x => x.classList.toggle('active', x === b));
+    render();
+  }));
+
+  // ── colour
   function bindColor(colorId, hexId, key) {
     $(colorId).addEventListener('input', () => {
       $(hexId).value = $(colorId).value;
       state.design[key] = $(colorId).value;
-      updateCmykFromHex(key === 'primary' ? 'primary' : 'secondary', state.design[key]);
+      if (key !== 'accent') updateCmykFromHex(key, state.design[key]);
       render();
     });
     $(hexId).addEventListener('change', () => {
@@ -1653,9 +1344,11 @@ function bindEvents() {
       if (!v.startsWith('#')) v = '#' + v;
       if (/^#[0-9a-f]{6}$/i.test(v)) {
         $(colorId).value = v;
-        state.design[key] = v;
-        updateCmykFromHex(key === 'primary' ? 'primary' : 'secondary', v);
+        state.design[key] = v.toLowerCase();
+        if (key !== 'accent') updateCmykFromHex(key, v);
         render();
+      } else {
+        $(hexId).value = state.design[key];
       }
     });
   }
@@ -1663,27 +1356,16 @@ function bindEvents() {
   bindColor('secondaryColor', 'secondaryHex', 'secondary');
   bindColor('accentColor', 'accentHex', 'accent');
 
-  // CMYK inputs → RGB
   function bindCmyk(prefix, key) {
     ['C', 'M', 'Y', 'K'].forEach(ch => {
       const el = $(prefix + ch);
       if (!el) return;
       el.addEventListener('change', () => {
-        const c = +$('pC' in window || prefix === 'p' ? 'pC' : 'sC').value || 0;
-        // simpler:
-        const vals = prefix === 'p'
-          ? [+$('pC').value, +$('pM').value, +$('pY').value, +$('pK').value]
-          : [+$('sC').value, +$('sM').value, +$('sY').value, +$('sK').value];
-        const [r, g, b] = cmykToRgb(...vals);
-        const hex = rgbToHex(r, g, b);
+        const vals = ['C', 'M', 'Y', 'K'].map(c => clamp(+$(prefix + c).value || 0, 0, 100));
+        const hex = rgbToHex(...cmykToRgb(...vals));
         state.design[key] = hex;
-        if (key === 'primary') {
-          $('primaryColor').value = hex;
-          $('primaryHex').value = hex;
-        } else {
-          $('secondaryColor').value = hex;
-          $('secondaryHex').value = hex;
-        }
+        $(key + 'Color').value = hex;
+        $(key + 'Hex').value = hex;
         render();
       });
     });
@@ -1691,7 +1373,6 @@ function bindEvents() {
   bindCmyk('p', 'primary');
   bindCmyk('s', 'secondary');
 
-  // Colour mode toggle
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
@@ -1702,25 +1383,28 @@ function bindEvents() {
       $('secondaryCmyk').hidden = !showCmyk;
     });
   });
-
-  // Harmony
-  $('harmonyComplement').addEventListener('click', () => applyHarmony('complement'));
-  $('harmonyAnalogous').addEventListener('click', () => applyHarmony('analogous'));
-  $('harmonyTriad').addEventListener('click', () => applyHarmony('triad'));
-  $('harmonyMono').addEventListener('click', () => applyHarmony('mono'));
+  ['Complement', 'Analogous', 'Triad', 'Mono'].forEach(n =>
+    $('harmony' + n).addEventListener('click', () => applyHarmony(n.toLowerCase())));
 
   $('bgMode').addEventListener('change', e => {
     state.design.background = e.target.value;
     $('customBgRow').hidden = e.target.value !== 'custom';
     render();
+    if (state.view === 'gallery') renderGallery();
   });
   $('customBgColor').addEventListener('input', () => {
     state.design.customBg = $('customBgColor').value;
     $('customBgHex').value = state.design.customBg;
     render();
   });
+  $('customBgHex').addEventListener('change', () => {
+    let v = $('customBgHex').value.trim();
+    if (!v.startsWith('#')) v = '#' + v;
+    if (/^#[0-9a-f]{6}$/i.test(v)) { state.design.customBg = v; $('customBgColor').value = v; render(); }
+    else $('customBgHex').value = state.design.customBg;
+  });
 
-  // Tabs
+  // ── tabs
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1731,95 +1415,115 @@ function bindEvents() {
     });
   });
 
-  // Tools
-  document.querySelectorAll('.tool-btn').forEach(btn => {
+  // ── tools, view, canvas
+  document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.tool = btn.dataset.tool;
+      $('artboardWrap').classList.toggle('pan', state.tool === 'pan');
     });
   });
-
   $('bgToggle').addEventListener('click', () => {
     const modes = ['light', 'dark', 'transparent', 'custom'];
-    const idx = modes.indexOf(state.design.background);
-    state.design.background = modes[(idx + 1) % modes.length];
+    state.design.background = modes[(modes.indexOf(state.design.background) + 1) % modes.length];
     $('bgMode').value = state.design.background;
     $('customBgRow').hidden = state.design.background !== 'custom';
     render();
+    if (state.view === 'gallery') renderGallery();
+  });
+  $('gridToggle').addEventListener('click', () => $('artboardWrap').classList.toggle('grid-off'));
+  $('zoomIn').addEventListener('click', () => zoomBy(10));
+  $('zoomOut').addEventListener('click', () => zoomBy(-10));
+  $('zoomLabel').addEventListener('dblclick', resetView);
+  $('favBtn').addEventListener('click', toggleFavCurrent);
+
+  const wrap = $('artboardWrap');
+  wrap.addEventListener('wheel', e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 10 : -10);
+  }, { passive: false });
+  let drag = null;
+  wrap.addEventListener('pointerdown', e => {
+    if (state.tool !== 'pan') return;
+    drag = { x: e.clientX - state.pan.x, y: e.clientY - state.pan.y };
+    wrap.setPointerCapture(e.pointerId);
+  });
+  wrap.addEventListener('pointermove', e => {
+    if (!drag) return;
+    state.pan = { x: e.clientX - drag.x, y: e.clientY - drag.y };
+    applyView();
+  });
+  wrap.addEventListener('pointerup', () => { drag = null; });
+  wrap.addEventListener('click', e => {
+    if (state.tool !== 'select') return;
+    const layer = e.target.closest && e.target.closest('[data-layer]');
+    state.selectedId = layer ? layer.getAttribute('data-layer') : null;
+    updateLayers();
+    refreshSelection();
   });
 
-  $('gridToggle').addEventListener('click', () => {
-    $('artboardWrap').classList.toggle('grid-off');
-  });
-
-  $('zoomIn').addEventListener('click', () => {
-    state.zoom = clamp(state.zoom + 10, 50, 200);
-    $('zoomLabel').textContent = state.zoom + '%';
-    $('artboard').style.transform = `scale(${state.zoom / 100})`;
-  });
-  $('zoomOut').addEventListener('click', () => {
-    state.zoom = clamp(state.zoom - 10, 50, 200);
-    $('zoomLabel').textContent = state.zoom + '%';
-    $('artboard').style.transform = `scale(${state.zoom / 100})`;
-  });
-
-  // Export
+  // ── export + project
   $('exportSvgBtn').addEventListener('click', exportSvg);
   $('exportPngBtn').addEventListener('click', exportPng);
   $('exportPackageBtn').addEventListener('click', exportPackage);
   if ($('exportPdfBtn')) $('exportPdfBtn').addEventListener('click', exportPdfBrandBook);
   if ($('aiGenerateBtn')) $('aiGenerateBtn').addEventListener('click', aiSuggestConcepts);
-
-  // Project
   $('saveBtn').addEventListener('click', saveProject);
   $('newBtn').addEventListener('click', () => {
-    if (confirm('Start a new project? Unsaved changes will be lost.')) location.reload();
+    if (!state.dirty || confirm('Start a new project? Unsaved changes will be lost.')) {
+      try { localStorage.removeItem(AUTOSAVE_KEY); } catch (_) {}
+      state.dirty = false;
+      location.reload();
+    }
   });
   $('openBtn').addEventListener('click', () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,.markcraft.json';
+    input.accept = '.json';
     input.onchange = () => { if (input.files[0]) loadProject(input.files[0]); };
     input.click();
   });
   $('projectName').addEventListener('change', e => { state.name = e.target.value; });
 
-  // Preferences & About
+  // ── dialogs + menus
   $('prefsBtn').addEventListener('click', openPrefs);
   $('prefsClose').addEventListener('click', closePrefs);
   $('prefsCancel').addEventListener('click', closePrefs);
   $('prefsSave').addEventListener('click', savePrefsFromUI);
   $('aboutClose').addEventListener('click', closeAbout);
   $('aboutOk').addEventListener('click', closeAbout);
-
-  // Menu buttons
+  $('menuFile').addEventListener('click', e => { e.stopPropagation(); openMenu(e.currentTarget, menuFile()); });
+  $('menuEdit').addEventListener('click', e => { e.stopPropagation(); openMenu(e.currentTarget, menuEdit()); });
+  $('menuView').addEventListener('click', e => { e.stopPropagation(); openMenu(e.currentTarget, menuView()); });
   $('menuHelp').addEventListener('click', openAbout);
-  $('menuFile').addEventListener('click', () => {
-    // simple: focus save
-    $('statusMsg').textContent = 'File · Use Save / Open / New buttons';
-  });
-  $('menuEdit').addEventListener('click', () => {
-    $('statusMsg').textContent = 'Edit · Use inspector panels to refine';
-  });
-  $('menuView').addEventListener('click', openPrefs);
-
-  // Close modals on overlay click
   $('prefsModal').addEventListener('click', e => { if (e.target === $('prefsModal')) closePrefs(); });
   $('aboutModal').addEventListener('click', e => { if (e.target === $('aboutModal')) closeAbout(); });
 
-  // Keyboard
+  // ── keyboard
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveProject(); }
-    if (e.ctrlKey && e.key === 'e') { e.preventDefault(); exportSvg(); }
-    if (e.key === 'Escape') { closePrefs(); closeAbout(); }
+    const t = e.target;
+    const typing = t && ((t.tagName === 'INPUT' && !['range', 'color', 'checkbox'].includes(t.type)) || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(); }
+    else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); exportSvg(); }
+    else if (mod && !typing && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    else if (mod && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+    else if (e.key === 'Escape') { closePrefs(); closeAbout(); closeMenus(); }
+    else if (!typing && !mod && e.key.toLowerCase() === 'g') { state.view === 'gallery' ? showEditor() : (gallery.pages.length ? showGallery() : generateRound()); }
   });
+  window.addEventListener('beforeunload', () => { clearTimeout(hist.timer); writeAutosave(); });
 }
 
 // ─────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────
 async function init() {
+  if (!Engine || !IconLib) {
+    document.body.innerHTML = '<p style="padding:24px;font-family:sans-serif">Logo engine failed to load (logo-engine.js / logo-icons.js).</p>';
+    return;
+  }
   await loadPrefsAsync();
   applyTheme(prefs.theme);
   if (prefs.grid === 'off') $('artboardWrap').classList.add('grid-off');
@@ -1827,10 +1531,18 @@ async function init() {
   if ($('bgMode')) $('bgMode').value = state.design.background;
 
   populateFonts();
+  populateEngineSelects();
   bindEvents();
   updateAiHint();
-  generateConcepts();
-  $('statusMsg').textContent = 'Markcraft Studio 1.1 ready';
+  setupAutosave();
+  syncUI();
+  const restored = offerAutosaveRestore();
+  if (!restored) generateRound();
+  else render();
+  pushHistory();
+  state.dirty = false;
+  applyView();
+  $('statusMsg').textContent = restored ? 'Autosave restored' : 'Markcraft Studio 1.2 ready — pick one of the 4 concepts';
 }
 
 document.addEventListener('DOMContentLoaded', init);

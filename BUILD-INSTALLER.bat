@@ -135,7 +135,7 @@ echo ============================================================
 echo.
 echo   Your installer is here:
 echo.
-echo   %CD%\release-installer\Markcraft-Studio-Setup-1.1.0.exe
+echo   %CD%\release-installer\Markcraft-Studio-Setup-1.2.0.exe
 echo.
 echo   You can copy that .exe to any Windows computer and install.
 echo.

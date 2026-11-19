@@ -1,6 +1,6 @@
 {
   "name": "markcraft-studio",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Professional vector logo and brand identity studio. Complete desktop application with PDF brand books and optional AI.",
   "main": "src/main/main.js",
   "author": "Bravo Projects",

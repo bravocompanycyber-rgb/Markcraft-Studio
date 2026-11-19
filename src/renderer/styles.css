@@ -759,3 +759,76 @@ input[type=range] {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ============================================================
+   1.2 — Concept gallery, view switch, menus, favourites
+   ============================================================ */
+.canvas-area { min-height: 0; }
+.view-switch { gap: 2px; }
+.view-btn {
+  border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-muted);
+  font: 600 11px var(--font); padding: 6px 12px; cursor: pointer; border-radius: 7px;
+}
+.view-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.view-btn.active { background: var(--bg-elevated); color: var(--gold-dim); border-color: var(--gold-bright); }
+.icon-btn.align-btn.active { color: var(--gold-bright); }
+#favBtn:hover { color: #d6456b; }
+
+.gallery { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 10px; display: flex; flex-direction: column; gap: 12px; }
+.gallery[hidden], .artboard-wrap[hidden], .canvas-footer[hidden] { display: none !important; }
+.gallery-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.gallery-head strong { display: block; font-size: 16px; margin-top: 2px; }
+.gallery-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gallery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(210px, 1fr); gap: 14px; flex: 1 0 auto; }
+.g-card {
+  min-height: 0;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  display: flex; flex-direction: column; box-shadow: var(--shadow); transition: transform .15s, box-shadow .15s, border-color .15s;
+}
+.g-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: var(--gold-bright); }
+.g-art { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.g-art svg { width: 100%; height: 100%; display: block; }
+.g-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.g-label { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-fav { border: 0; background: transparent; font-size: 17px; line-height: 1; color: var(--text-dim); cursor: pointer; padding: 2px 4px; }
+.g-fav:hover { color: #d6456b; }
+.g-fav.on { color: #d6456b; }
+.gallery-hint { text-align: center; margin: 0; }
+.btn:disabled { opacity: .4; cursor: default; pointer-events: none; }
+
+.concept-strip { flex: none; }
+.concepts { align-items: center; }
+.concept-card { position: relative; flex: none; width: 108px; height: 76px; background: #fff; }
+.concept-card svg { width: 100%; height: 100%; }
+.fav-x {
+  position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border: 0; border-radius: 50%;
+  background: rgba(20,24,36,.6); color: #fff; font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; padding: 0;
+}
+.concept-card:hover .fav-x { opacity: 1; }
+
+.artboard-wrap.pan { cursor: grab; }
+.artboard-wrap.pan:active { cursor: grabbing; }
+.artboard svg .sel-box { pointer-events: none; }
+
+.menu-pop {
+  position: fixed; z-index: 1000; min-width: 220px; background: var(--bg-panel); border: 1px solid var(--border-strong);
+  border-radius: 9px; box-shadow: var(--shadow-lg); padding: 5px;
+}
+.menu-pop hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
+.menu-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 24px; width: 100%; border: 0; background: transparent;
+  color: var(--text); font: 12px var(--font); padding: 7px 10px; border-radius: 6px; cursor: pointer; text-align: left;
+}
+.menu-item:hover { background: var(--bg-elevated); color: var(--gold-dim); }
+.menu-item kbd { font: 10px var(--mono); color: var(--text-dim); }
+
+label.check { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
+label.check input { width: auto; }
+
+.gallery-hint { flex: none; }
+.concept-strip.empty { padding: 6px 12px; }
+.concept-strip.empty .concept-header { display: none; }
+.concept-strip.empty .concepts { min-height: 0; }
+.concept-strip.empty .hint { margin: 0; }
+label.check { flex-direction: row !important; align-items: center; justify-content: flex-start; gap: 8px; }
+label.check input[type=checkbox] { flex: none; width: 16px; height: 16px; margin: 0; }

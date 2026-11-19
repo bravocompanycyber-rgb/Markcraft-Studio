@@ -124,7 +124,7 @@
         <label>Additional notes
           <textarea id="notes" rows="2" placeholder="Symbolism, must-include elements, things to avoid..."></textarea>
         </label>
-        <button class="btn primary full" id="generateBtn">✦ Generate concepts</button>
+        <button class="btn primary full" id="generateBtn">✦ Generate 4 concepts</button>
         <button class="btn subtle full" id="aiGenerateBtn" style="margin-top:8px">◎ AI concept suggestions</button>
         <p class="hint" id="aiStatusHint" style="margin-top:6px">AI is optional. Configure in Preferences.</p>
       </div>
@@ -140,16 +140,21 @@
     <!-- CENTER CANVAS -->
     <section class="canvas-area">
       <div class="canvas-toolbar">
+        <div class="tool-group view-switch">
+          <button class="view-btn" data-view="gallery" title="Choose from 4 concepts (G)">▦ Concepts</button>
+          <button class="view-btn" data-view="editor" title="Refine the chosen logo (G)">✎ Editor</button>
+        </div>
         <div class="tool-group">
           <button class="tool-btn active" data-tool="select" title="Select (V)">↖</button>
           <button class="tool-btn" data-tool="pan" title="Pan">✥</button>
         </div>
         <div class="tool-group">
-          <button class="icon-btn" id="alignLeft" title="Align left">⊣</button>
-          <button class="icon-btn" id="alignCenter" title="Align center">≡</button>
-          <button class="icon-btn" id="alignRight" title="Align right">⊢</button>
+          <button class="icon-btn align-btn" data-align="left" id="alignLeft" title="Align left">⊣</button>
+          <button class="icon-btn align-btn" data-align="center" id="alignCenter" title="Align center">≡</button>
+          <button class="icon-btn align-btn" data-align="right" id="alignRight" title="Align right">⊢</button>
         </div>
         <div class="toolbar-right">
+          <button class="icon-btn" id="favBtn" title="Save this logo to favourites">♥</button>
           <button class="icon-btn" id="bgToggle" title="Artboard background">◐</button>
           <button class="icon-btn" id="gridToggle" title="Toggle grid">▦</button>
           <button class="icon-btn" id="zoomOut" title="Zoom out">−</button>
@@ -158,21 +163,35 @@
         </div>
       </div>
 
-      <div class="artboard-wrap" id="artboardWrap">
+      <section class="gallery" id="gallery">
+        <div class="gallery-head">
+          <div><span class="eyebrow">CONCEPTS</span><strong id="galTitle">Choose a direction</strong></div>
+          <div class="gallery-nav">
+            <button class="btn subtle tiny" id="galPrev">‹ Previous</button>
+            <span id="galPage" class="muted">Round 1 of 1</span>
+            <button class="btn subtle tiny" id="galNext">Next ›</button>
+            <button class="btn primary" id="galMore">✦ Generate 4 more</button>
+          </div>
+        </div>
+        <div class="gallery-grid" id="galleryGrid"></div>
+        <p class="hint gallery-hint">Click any logo to open it in the editor · ♥ keeps it in your favourites · “More like this” explores variations of one idea</p>
+      </section>
+
+      <div class="artboard-wrap" id="artboardWrap" hidden>
         <div class="artboard" id="artboard">
           <svg id="logoSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" role="img" aria-label="Logo artboard"></svg>
         </div>
       </div>
 
-      <div class="canvas-footer">
+      <div class="canvas-footer" id="canvasFooter" hidden>
         <span id="canvasStatus">Ready · Vector artboard 900×600</span>
         <span id="selectionInfo">No selection</span>
       </div>
 
       <div class="concept-strip">
         <div class="concept-header">
-          <span class="eyebrow">CONCEPT FAMILIES</span>
-          <strong>Select a direction to refine</strong>
+          <span class="eyebrow">FAVOURITES</span>
+          <strong>Saved directions — click to reopen</strong>
         </div>
         <div class="concepts" id="concepts"></div>
       </div>
@@ -205,8 +224,16 @@
         <label>Letter spacing <span class="value-label" id="trackingVal">5</span>
           <input id="tracking" type="range" min="-2" max="24" value="5">
         </label>
-        <label>Wordmark scale <span class="value-label" id="scaleVal">100%</span>
-          <input id="scale" type="range" min="55" max="145" value="100">
+        <label>Name styling
+          <select id="wordmarkStyle"></select>
+        </label>
+        <label>Letter case
+          <select id="caseStyle">
+            <option value="upper">UPPERCASE</option>
+            <option value="title">Title Case</option>
+            <option value="lower">lowercase</option>
+            <option value="asis">As typed</option>
+          </select>
         </label>
         <label>Font weight
           <select id="fontWeight">
@@ -303,14 +330,11 @@
 
       <!-- LAYOUT TAB -->
       <section class="tab-content" id="tab-layout" hidden>
-        <label>Composition
-          <select id="composition">
-            <option value="stacked">Stacked (mark above type)</option>
-            <option value="horizontal">Horizontal (mark + type)</option>
-            <option value="wordmark">Wordmark only</option>
-            <option value="seal">Seal / badge</option>
-            <option value="monogram">Monogram focus</option>
-          </select>
+        <label>Layout
+          <select id="composition"></select>
+        </label>
+        <label>Overall logo scale <span class="value-label" id="scaleVal">100%</span>
+          <input id="scale" type="range" min="55" max="145" value="100">
         </label>
         <label>Symbol size <span class="value-label" id="symbolSizeVal">100%</span>
           <input id="symbolSize" type="range" min="40" max="160" value="100">
@@ -325,45 +349,28 @@
 
       <!-- SYMBOL TAB -->
       <section class="tab-content" id="tab-symbol" hidden>
-        <label>Symbol family
-          <select id="symbolKind">
-            <option value="craft">Designer craft (classic method)</option>
-            <option value="freeform">Freeform (unique procedural)</option>
-            <option value="monogram">Initial monogram</option>
-            <option value="building">Building / tower</option>
-            <option value="skyline">City skyline</option>
-            <option value="house">House / home</option>
-            <option value="key">Key / access</option>
-            <option value="columns">Columns / classical</option>
-            <option value="roof">Roof / shelter</option>
-            <option value="nodes">Network nodes</option>
-            <option value="circuit">Circuit / tech</option>
-            <option value="hexagon">Hexagon / tech</option>
-            <option value="growth">Growth bars</option>
-            <option value="coin">Coin / value</option>
-            <option value="pulse">Pulse / health</option>
-            <option value="droplet">Droplet / pure</option>
-            <option value="flame">Flame / energy</option>
-            <option value="cup">Cup / café</option>
-            <option value="leaf">Leaf / organic</option>
-            <option value="bolt">Bolt / power</option>
-            <option value="chevron">Chevron / motion</option>
-            <option value="target">Target / focus</option>
-            <option value="book">Book / knowledge</option>
-            <option value="crest">Crest / heritage</option>
-            <option value="ring">Ring / unity</option>
-            <option value="petal">Petal / beauty</option>
-            <option value="arrow">Arrow / direction</option>
-            <option value="shield">Shield / trust</option>
-            <option value="diamond">Diamond / premium</option>
-            <option value="orbit">Orbit / global</option>
-            <option value="wave">Wave / fluid</option>
-            <option value="star">Star / radiance</option>
-            <option value="abstract">Abstract mark</option>
-            <option value="none">None (wordmark only)</option>
-          </select>
+        <label>Main symbol
+          <select id="symbolKind"></select>
         </label>
-        <p class="hint">All symbols are pure vector paths. They remain fully editable in Illustrator, Affinity Designer, Inkscape and Figma.</p>
+        <label>Second symbol (small badge on the mark)
+          <select id="secondKind"></select>
+        </label>
+        <label>Frame shape
+          <select id="frameKind"></select>
+        </label>
+        <label>Finish (flat → 3D)
+          <select id="finishKind"></select>
+        </label>
+        <label>Fill style
+          <select id="fillStyle"></select>
+        </label>
+        <label>Backdrop layer
+          <select id="backdropKind"></select>
+        </label>
+        <label>Ornament
+          <select id="ornamentKind"></select>
+        </label>
+        <label class="check"><input type="checkbox" id="rolesSwap"> Swap primary / secondary roles</label>
       </section>
 
       <!-- QUALITY GATE -->
@@ -382,7 +389,7 @@
   </main>
 
   <div class="status-bar">
-    <span>Markcraft Studio 1.1 · Local-first · Zero cloud</span>
+    <span>Markcraft Studio 1.2 · Local-first · Zero cloud</span>
     <span id="statusMsg">Ready</span>
   </div>
 </div>
@@ -473,7 +480,7 @@
         <div class="brand-mark large">M</div>
         <div>
           <strong>Markcraft Studio</strong>
-          <span>Version 1.1.0</span>
+          <span>Version 1.2.0</span>
         </div>
       </div>
       <p>Professional vector logo and brand identity studio for people who need excellent marks without being illustrators.</p>
@@ -494,6 +501,8 @@
   </div>
 </div>
 
+<script src="logo-icons.js"></script>
+<script src="logo-engine.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -28,3 +28,9 @@ Markcraft's **Designer craft** engine follows methods used by professionals long
 
 ## Industry conventions
 The craft engine picks methods the way a studio would brief a designer — tech leans geometric, law leans seal/pillar, food leans organic leaf, finance leans lettermark/monogram.
+
+## 1.2 — How concepts are composed
+
+Each concept is a recipe: `layout · icon · frame · fill · finish · backdrop · badgeIcon · ornament · font pairing · name styling · colour roles`.
+The generator picks recipes from the personality's preference table and the industry's icon list, and guarantees that the 4 concepts in a round differ in layout, icon and frame, and that no recipe is ever shown twice in a session.
+Rendering measures every text run first (canvas `measureText`), builds the lockup in local units, then scales it to fit the artboard, so nothing can overlap or clip.

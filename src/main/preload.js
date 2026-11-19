@@ -3,7 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('markcraft', {
-  version: '1.1.0',
+  version: '1.2.0',
   platform: process.platform,
   onOpenAbout: (cb) => ipcRenderer.on('open-about', () => cb()),
   prefsGet: () => ipcRenderer.invoke('prefs-get'),
